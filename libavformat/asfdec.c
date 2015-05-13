@@ -146,6 +146,36 @@ static void print_guid(ff_asf_guid *g)
 #define print_guid(g)
 #endif
 
+#include <dlfcn.h>
+
+typedef int PRDecryptWMAFunc(char* a, uint8_t* b, uint32_t c,
+                int d, int e, int64_t f, int g);
+typedef int PRSetDrmHeaderFunc(const void *headerData, size_t size, const void *licenseurl);
+typedef void PRCloseFunc(void);
+
+void *gPRWMVLibHandle = NULL;
+static PRDecryptWMAFunc* PRDecryptWMA = NULL;
+static PRSetDrmHeaderFunc* PRSetDrmHeader = NULL;
+static PRCloseFunc* PRClose = NULL;
+
+static int get_PRWMV_func_handle()
+{
+    if (gPRWMVLibHandle == NULL)
+        gPRWMVLibHandle = dlopen("libprwmv.so", RTLD_NOW);
+    if (NULL == gPRWMVLibHandle) {
+        av_log(NULL, AV_LOG_WARNING, "DRM asf file loading lib libprwmv.so failure %s",dlerror());
+        return -1;
+    }
+    PRSetDrmHeader = (PRSetDrmHeaderFunc*)dlsym(gPRWMVLibHandle, "PRSetDrmHeader");
+    PRDecryptWMA = (PRDecryptWMAFunc*)dlsym(gPRWMVLibHandle, "PRDecryptWMA");
+    PRClose = (PRCloseFunc*)dlsym(gPRWMVLibHandle, "PRClose");
+    if (PRSetDrmHeader == NULL || PRDecryptWMA == NULL || PRClose == NULL) {
+        av_log(NULL, AV_LOG_ERROR, "Get PR decrypt func handle failed \n");
+        return -1;
+    }
+    return 0;
+}
+
 static int asf_probe(AVProbeData *pd)
 {
     /* check file header */
@@ -316,6 +346,34 @@ static void get_tag(AVFormatContext *s, const char *key, int type, int len, int 
 finish:
     av_freep(&value);
     avio_seek(s->pb, off + len, SEEK_SET);
+}
+
+static int asf_extract_cover_pic(AVFormatContext *s, int size)
+{
+    AVIOContext *pb = s->pb;
+    int pic_type, data_len, ret;
+    char mime_type[64];
+    char *data;
+
+    pic_type = avio_r8(pb);
+    data_len = avio_rl32(pb);
+    ret = avio_get_str16le(pb, size - data_len -5, mime_type, sizeof(mime_type));
+    avio_skip(pb, (size - data_len - ret - 5));
+    av_dict_set(&s->metadata, "cover_pic", mime_type, 0);
+
+    if(s->cover_data){
+        av_log(s, AV_LOG_INFO, "Extract cover picture in other object!\n");
+        return 0;
+    }
+    s->cover_data= av_malloc(data_len);
+    if(!s->cover_data){
+        av_log(s, AV_LOG_INFO, "no memery, av_alloc failed!\n");
+        return 0;
+    }
+    s->cover_data_len = data_len;
+    avio_read(pb, s->cover_data, data_len);
+
+    return 1;	
 }
 
 static int asf_read_file_properties(AVFormatContext *s, int64_t size)
@@ -610,6 +668,8 @@ static int asf_read_ext_content_desc(AVFormatContext *s, int64_t size)
             asf->dar[0].num = get_value(s->pb, value_type, 32);
         else if (!strcmp(name, "AspectRatioY"))
             asf->dar[0].den = get_value(s->pb, value_type, 32);
+        else if(!strcmp(name, "WM/Picture"))
+            asf_extract_cover_pic(s, value_len);
         else
             get_tag(s, name, value_type, value_len, 32);
     }
@@ -668,6 +728,8 @@ static int asf_read_metadata(AVFormatContext *s, int64_t size)
             int aspect_y = get_value(s->pb, value_type, 16);
             if(stream_num < 128)
                 asf->dar[stream_num].den = aspect_y;
+        } else if(!strcmp(name, "WM/Picture")){
+            asf_extract_cover_pic(s, value_len);
         } else {
             get_tag(s, name, value_type, value_len, 16);
         }
@@ -798,9 +860,23 @@ static int asf_read_header(AVFormatContext *s)
                     len= avio_rl32(pb);
                     get_tag(s, "ASF_License_URL", -1, len, 32);
                 } else if (!ff_guidcmp(&g, &ff_asf_ext_content_encryption)) {
-                    av_log(s, AV_LOG_WARNING,
-                           "Ext DRM protected stream detected, decoding will likely fail!\n");
-                    av_dict_set(&s->metadata, "encryption", "ASF Extended Content Encryption", 0);
+                    //av_log(s, AV_LOG_WARNING,
+                    //       "Ext DRM protected stream detected, decoding will likely fail!\n");
+                    //av_dict_set(&s->metadata, "encryption", "ASF Extended Content Encryption", 0);
+                    unsigned int len= avio_rl32(pb);
+                    AVPacket pkt;
+                    av_log(s, AV_LOG_WARNING, "Ext DRM size %d\n", len);
+                    av_get_packet(pb, &pkt, len);
+                    if (!get_PRWMV_func_handle()) {
+                        int ret = PRSetDrmHeader(pkt.data, len, NULL);
+                        if (!ret) {
+                            av_log(NULL, AV_LOG_ERROR, "PlayReady header format error!!!%d\n", ret);
+                        } else {
+                            s->flags |= AVFMT_FLAG_PR_WMA;
+                            av_log(NULL, AV_LOG_WARNING, "PlayReady encrypted WMA, Support!");
+                        }
+                    }
+                    av_free_packet(&pkt);
                 } else if (!ff_guidcmp(&g, &ff_asf_digital_signature)) {
                     av_log(s, AV_LOG_INFO, "Digital signature detected!\n");
                 }
@@ -1253,6 +1329,8 @@ static int asf_parse_packet(AVFormatContext *s, AVIOContext *pb, AVPacket *pkt)
         if (s->key && s->keylen == 20)
             ff_asfcrypt_dec(s->key, asf_st->pkt.data + asf->packet_frag_offset,
                             ret);
+        if (s->flags & AVFMT_FLAG_PR_WMA && PRDecryptWMA)
+            PRDecryptWMA(NULL, asf_st->pkt.data, 1, ret, 1, asf_st->pkt.pts, 0);
         asf_st->frag_offset += ret;
         /* test if whole packet is read */
         if (asf_st->frag_offset == asf_st->pkt.size) {
@@ -1394,6 +1472,9 @@ static void skip_to_key(AVFormatContext *s)
 static int asf_read_close(AVFormatContext *s)
 {
     asf_reset_header(s);
+    if ((s->flags & AVFMT_FLAG_PR_WMA) && PRClose) {
+        PRClose();
+    }
 
     return 0;
 }

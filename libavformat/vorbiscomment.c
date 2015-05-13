@@ -35,6 +35,10 @@ const AVMetadataConv ff_vorbiscomment_metadata_conv[] = {
     { "TRACKNUMBER", "track"  },
     { "DISCNUMBER",  "disc"   },
     { "DESCRIPTION", "comment" },
+    { "ARTIST", "artist" },
+    { "ALBUM", "album" },
+    { "TITLE", "title" },
+    { "GENRE", "genre" },
     { 0 }
 };
 

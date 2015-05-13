@@ -26,6 +26,8 @@
 #include "rawdec.h"
 #include "id3v1.h"
 #include "apetag.h"
+#include "id3v2.h"
+#include "adif.h"
 
 static int adts_aac_probe(AVProbeData *p)
 {
@@ -37,6 +39,10 @@ static int adts_aac_probe(AVProbeData *p)
     const uint8_t *end = buf0 + p->buf_size - 7;
 
     buf = buf0;
+
+    if(!memcmp(buf, "ADIF", 4)){
+       return AVPROBE_SCORE_EXTENSION+1;
+    }
 
     for(; buf < end; buf= buf2+1) {
         buf2 = buf;
@@ -65,7 +71,10 @@ static int adts_aac_probe(AVProbeData *p)
 static int adts_aac_read_header(AVFormatContext *s)
 {
     AVStream *st;
-
+    int err;
+    uint8_t *buf=s->pb->buffer;
+    ID3v2ExtraMeta *id3v2_extra_meta = NULL;
+	
     st = avformat_new_stream(s, NULL);
     if (!st)
         return AVERROR(ENOMEM);
@@ -84,6 +93,19 @@ static int adts_aac_read_header(AVFormatContext *s)
 
     //LCM of all possible ADTS sample rates
     avpriv_set_pts_info(st, 64, 1, 28224000);
+    ff_id3v2_read(s, "ID3", &id3v2_extra_meta);
+
+    if (buf[0]=='A' && buf[1]=='D' && buf[2]=='I' && buf[3]=='F')
+    {
+        err = adif_header_parse(st,s->pb);
+        if(err){
+            av_log(NULL, AV_LOG_INFO," adif parser header  failed\n");
+            return err;
+        } else{
+            st->need_parsing = AVSTREAM_PARSE_NONE;
+            st->codec->codec_id = AV_CODEC_ID_AAC;
+        }
+    }	
 
     return 0;
 }

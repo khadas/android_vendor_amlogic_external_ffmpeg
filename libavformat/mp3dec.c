@@ -198,11 +198,79 @@ static int mp3_parse_vbr_tags(AVFormatContext *s, AVStream *st, int64_t base)
     return 0;
 }
 
+static int read_id3_version(AVIOContext * pb)
+{
+    struct id3_header {
+        char id[3];
+        uint8_t version_major;
+        uint8_t version_minor;
+        uint8_t flags;
+        uint8_t enc_size[4];
+    };
+    struct id3_header header;
+    avio_seek(pb, 0, SEEK_SET);
+    avio_read(pb, &header, sizeof(struct id3_header));
+    avio_seek(pb, -sizeof(struct id3_header), SEEK_CUR);
+    if (memcmp(header.id, "ID3", 3)) {
+        return 1;
+    }
+    if (header.version_major == 0xff || header.version_minor == 0xff) {
+        return 0;
+    }
+    if (header.version_major == 2) {
+        if (header.flags & 0x3f) {
+            // We only support the 2 high bits, if any of the lower bits are
+            // set, we cannot guarantee to understand the tag format.
+            return 0;
+        }
+
+        if (header.flags & 0x40) {
+            // No compression scheme has been decided yet, ignore the
+            // tag if compression is indicated.
+
+            return 0;
+        }
+        return 2;
+    } else if (header.version_major == 3) {
+        if (header.flags & 0x1f) {
+            // We only support the 3 high bits, if any of the lower bits are
+            // set, we cannot guarantee to understand the tag format.
+            return 0;
+        }
+        return 3;
+    } else if (header.version_major == 4) {
+        if (header.flags & 0x0f) {
+            // The lower 4 bits are undefined in this spec.
+            return 0;
+        }
+        return 4;
+    } else {
+        return 0;
+    }
+}
+
+static int mp3_read_id32(AVFormatContext *s)
+{
+    ID3v2ExtraMeta *id3v2_extra_meta = NULL;
+    int err;
+    ff_id3v2_read(s, ID3v2_DEFAULT_MAGIC, &id3v2_extra_meta);
+    if (id3v2_extra_meta) {
+        int err = ff_id3v2_parse_apic(s, &id3v2_extra_meta);
+        if (err < 0) {
+            av_log(NULL, AV_LOG_INFO, "[%s:%d]ff_id3v2_parse_apic err:%d\n", __FUNCTION__, __LINE__, err);
+            return err;
+        }
+    }
+    ff_id3v2_free_extra_meta(&id3v2_extra_meta);
+    return 0;
+}
+
 static int mp3_read_header(AVFormatContext *s)
 {
     MP3DecContext *mp3 = s->priv_data;
     AVStream *st;
     int64_t off;
+    int version = 0;
 
     st = avformat_new_stream(s, NULL);
     if (!st)
@@ -219,8 +287,23 @@ static int mp3_read_header(AVFormatContext *s)
     s->pb->maxsize = -1;
     off = avio_tell(s->pb);
 
+    version = read_id3_version(s->pb);
+    switch (version) {
+        case 1:
+            ff_id3v1_read(s);
+            break;
+        case 2:
+        case 3:
+        case 4:
+            mp3_read_id32(s);
+            break;
+        default:
+            return -1;
+    }
+#if 0
     if (!av_dict_get(s->metadata, "", NULL, AV_DICT_IGNORE_SUFFIX))
         ff_id3v1_read(s);
+#endif
 
     if(s->pb->seekable)
         mp3->filesize = avio_size(s->pb);

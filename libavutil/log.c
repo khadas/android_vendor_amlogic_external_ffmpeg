@@ -78,6 +78,18 @@ static HANDLE con;
 #define set_color(x)  SetConsoleTextAttribute(con, background | color[x])
 #define set_256color set_color
 #define reset_color() SetConsoleTextAttribute(con, attr_orig)
+#elif defined(ANDROID)
+#include <android/log.h>
+#include <stdio.h>
+#include <stdarg.h>
+#include <string.h>
+#define  LOG_TAG    "exffmpeg"
+#define  LOGI(...)  __android_log_print(ANDROID_LOG_INFO,LOG_TAG,__VA_ARGS__)
+#define  LOGE(...)  __android_log_print(ANDROID_LOG_ERROR,LOG_TAG,__VA_ARGS__)
+#define set_color(x)
+#define reset_color()
+#define set_256color set_color
+#define  LOG(tag,...)  __android_log_print(ANDROID_LOG_INFO,tag,__VA_ARGS__)
 #else
 
 static const uint32_t color[16 + AV_CLASS_CATEGORY_NB] = {
@@ -136,7 +148,11 @@ static void colored_fputs(int level, const char *str)
         set_color(level);
     } else if (use_color == 256)
         set_256color(level);
-    fputs(str, stderr);
+#ifdef ANDROID
+	LOGI("%s", str);
+#else
+       fputs(str, stderr);
+#endif
     if (use_color) {
         reset_color();
     }

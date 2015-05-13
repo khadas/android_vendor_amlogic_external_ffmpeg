@@ -38,7 +38,7 @@ static int dts_probe(AVProbeData *p)
 
     buf = p->buf;
 
-    for(; buf < (p->buf+p->buf_size)-2; buf+=2) {
+    for (; buf < (p->buf+p->buf_size)-2; buf+=2) {
         bufp = buf;
         state = (state << 16) | bytestream_get_be16(&bufp);
 

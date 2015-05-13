@@ -45,6 +45,7 @@
 #include "libavcodec/get_bits.h"
 #include "id3v1.h"
 #include "mov_chan.h"
+#include "seek.h"
 
 #if CONFIG_ZLIB
 #include <zlib.h>
@@ -56,6 +57,7 @@
 #undef NDEBUG
 #include <assert.h>
 
+#include "id3v2.h"
 /* those functions parse an atom */
 /* links atom IDs to parse functions */
 typedef struct MOVParseTableEntry {
@@ -233,6 +235,29 @@ static int mov_read_mac_string(MOVContext *c, AVIOContext *pb, int len,
     return p - dst;
 }
 
+static int mov_extract_cover_pic(AVFormatContext *s, AVIOContext *pb, int type, int size, char *value)
+{
+    if(s->cover_data){
+        av_log(s, AV_LOG_INFO, "Extract cover picture in other atom!\n");
+        return 0;
+    }
+
+    s->cover_data = av_malloc(size);
+    if(!s->cover_data){
+        av_log(s, AV_LOG_INFO, "no memery, av_alloc failed!\n");
+	 return -1;
+    }
+    s->cover_data_len = size;
+    avio_read(pb, s->cover_data, size);
+
+    if (type == 13)
+        strcpy(value, "image/jpeg");  // jpeg
+    else if (type == 14)
+        strcpy(value, "image/png");   // png
+
+    return 0;
+}
+
 static int mov_read_covr(MOVContext *c, AVIOContext *pb, int type, int len)
 {
     AVPacket pkt;
@@ -286,6 +311,140 @@ static int mov_metadata_raw(MOVContext *c, AVIOContext *pb,
     return av_dict_set(&c->fc->metadata, key, value, AV_DICT_DONT_STRDUP_VAL);
 }
 
+static int mov_metadata_3gpp_general(MOVContext *c, AVIOContext *pb,
+                             unsigned len, const char *key)
+{
+    char key2[16];
+    uint8_t version;
+    uint32_t flags;
+    uint8_t pad;
+    uint16_t langcode;
+    uint16_t shortbytes;
+    char language[4] = {0};
+    char byte = 0;
+    char str[128] = {0};
+    int offset = 0;
+    uint16_t byteOrderMark = 0;
+
+    version = avio_r8(pb); // version
+    flags = avio_rb24(pb); //flags
+    shortbytes = avio_rb16(pb);
+    pad = (shortbytes & 0x8000) >> 15;
+    langcode = shortbytes & 0x7ffff;
+    ff_mov_lang_to_iso639(langcode, language);
+    len -= 6;
+
+    //read BYTE ORDER MARK
+    byteOrderMark = avio_rb16(pb);
+    if (byteOrderMark == 0xFEFF) {//UTF-16BE
+        len -= 2;
+        offset += 2;
+        avio_get_str16be(pb, len, str, 128);
+        av_dict_set(&c->fc->metadata, key, str, 0);
+    } else if (byteOrderMark == 0xFFFE) {//UTF-16LE
+        len -= 2;
+        offset += 2;
+        avio_get_str16le(pb, len, str, 128);
+        av_dict_set(&c->fc->metadata, key, str, 0);
+    } else {   //not BYTE ORDER MARK,UTF-8 format
+        avio_seek(pb, -2, SEEK_CUR);
+        avio_read(pb, str+offset, len);
+        str[len] = 0;
+        av_dict_set(&c->fc->metadata, key, str, 0);
+        if (*language && strcmp(language, "und")) {
+            snprintf(key2, sizeof(key2), "%s-%s", key, language);
+            av_dict_set(&c->fc->metadata, key2, str, 0);
+        }
+    }
+    return 0;
+}
+
+static int mov_metadata_3gpp_yrrc(MOVContext *c, AVIOContext *pb,
+                             unsigned len, const char *key)
+{
+    uint8_t version;
+    uint32_t flags;
+    char byte = 0;
+    char str[128] = {0};
+    char year[32] = {0};
+    uint16_t yearCode = 0;
+
+    version = avio_r8(pb); // version
+    flags = avio_rb24(pb); //flags
+    len -= 4;
+
+    //get the year when the media was recorded
+    yearCode = avio_rb16(pb);
+    snprintf(year, sizeof(year), "%d", yearCode);
+    av_dict_set(&c->fc->metadata, key, year, 0);
+
+    return 0;
+}
+
+static int mov_metadata_3gpp_album(MOVContext *c, AVIOContext *pb,
+                             unsigned len, const char *key)
+{
+    char key2[16];
+    uint8_t version;
+    uint32_t flags;
+    uint8_t pad;
+    uint16_t langcode;
+    uint16_t shortbytes;
+    char language[4] = {0};
+    char byte = 0;
+    int read_byte = 0;
+    char str[128] = {0};
+    int offset = 0;
+    uint16_t byteOrderMark = 0;
+    uint8_t trackNum[16] ={0};
+
+    version = avio_r8(pb); // version
+    flags = avio_rb24(pb); //flags
+    shortbytes = avio_rb16(pb);
+    pad = (shortbytes & 0x8000) >> 15;  //pad
+    langcode = shortbytes & 0x7ffff;    //language
+    ff_mov_lang_to_iso639(langcode, language);
+    len -= 6;
+
+    //get track num
+    do {
+        byte = avio_r8(pb);
+        read_byte++;
+    } while(byte != '\0');
+    byte = avio_r8(pb);
+    read_byte++;
+    snprintf(trackNum, sizeof(trackNum), "%d", byte);
+    av_dict_set(&c->fc->metadata, "track", trackNum, 0);
+
+    //seek back to get Text of album title
+    avio_seek(pb, -read_byte, SEEK_CUR);
+
+    //read BYTE ORDER MARK
+    byteOrderMark = avio_rb16(pb);
+    if (byteOrderMark == 0xFEFF) {//UTF-16BE
+        len -= 2;
+        offset += 2;
+        avio_get_str16be(pb, len, str, 128);
+        av_dict_set(&c->fc->metadata, key, str, 0);
+    } else if (byteOrderMark == 0xFFFE) {//UTF-16LE
+        len -= 2;
+        offset += 2;
+        avio_get_str16le(pb, len, str, 128);
+        av_dict_set(&c->fc->metadata, key, str, 0);
+    } else {   //not BYTE ORDER MARK,UTF-8 format
+        avio_seek(pb, -2, SEEK_CUR);
+        avio_read(pb, str+offset, len);
+        str[len] = 0;
+        av_dict_set(&c->fc->metadata, key, str, 0);
+        if (*language && strcmp(language, "und")) {
+            snprintf(key2, sizeof(key2), "%s-%s", key, language);
+            av_dict_set(&c->fc->metadata, key2, str, 0);
+        }
+    }
+
+    return 0;
+}
+
 static int mov_read_udta_string(MOVContext *c, AVIOContext *pb, MOVAtom atom)
 {
 #ifdef MOV_EXPORT_ALL_METADATA
@@ -295,12 +454,40 @@ static int mov_read_udta_string(MOVContext *c, AVIOContext *pb, MOVAtom atom)
     const char *key = NULL;
     uint16_t langcode = 0;
     uint32_t data_type = 0, str_size;
+    uint32_t cover_size = 0;
+    int skip_read = 0;
     int (*parse)(MOVContext*, AVIOContext*, unsigned, const char*) = NULL;
 
     if (c->itunes_metadata && atom.type == MKTAG('-','-','-','-'))
         return mov_read_custom_metadata(c, pb, atom);
 
     switch (atom.type) {
+    case MKTAG('t', 'i', 't', 'l'):
+        key = "title";
+        skip_read = 1;
+        parse = mov_metadata_3gpp_general;
+        break;
+    case MKTAG('a', 'l', 'b', 'm'):
+        key = "album";
+        skip_read = 1;
+        parse = mov_metadata_3gpp_album;
+        break;
+    case MKTAG('d', 's', 'c', 'p'):
+        key = "description";
+        skip_read = 1;
+        parse = mov_metadata_3gpp_general;
+        break;
+    case MKTAG('p', 'e', 'r', 'f'):
+        key = "artist";
+        skip_read = 1;
+        parse = mov_metadata_3gpp_general;
+        break;
+    case MKTAG('y', 'r', 'r', 'c'):
+        key = "year";
+        skip_read = 1;
+        parse = mov_metadata_3gpp_yrrc;
+    break;
+
     case MKTAG(0xa9,'n','a','m'): key = "title";     break;
     case MKTAG(0xa9,'a','u','t'):
     case MKTAG(0xa9,'A','R','T'): key = "artist";    break;
@@ -355,6 +542,7 @@ static int mov_read_udta_string(MOVContext *c, AVIOContext *pb, MOVAtom atom)
             data_type = avio_rb32(pb); // type
             avio_rb32(pb); // unknown
             str_size = data_size - 16;
+            cover_size = data_size -16;
             atom.size -= 16;
 
             if (atom.type == MKTAG('c', 'o', 'v', 'r')) {
@@ -366,10 +554,15 @@ static int mov_read_udta_string(MOVContext *c, AVIOContext *pb, MOVAtom atom)
             }
         } else return 0;
     } else if (atom.size > 4 && key && !c->itunes_metadata) {
-        str_size = avio_rb16(pb); // string length
-        langcode = avio_rb16(pb);
-        ff_mov_lang_to_iso639(langcode, language);
-        atom.size -= 4;
+        if (skip_read) {
+            str_size = atom.size;
+        }
+        else{
+            str_size = avio_rb16(pb); // string length
+            langcode = avio_rb16(pb);
+            ff_mov_lang_to_iso639(langcode, language);
+            atom.size -= 4;
+        }
     } else
         str_size = atom.size;
 
@@ -392,9 +585,16 @@ static int mov_read_udta_string(MOVContext *c, AVIOContext *pb, MOVAtom atom)
     else {
         if (data_type == 3 || (data_type == 0 && (langcode < 0x400 || langcode == 0x7fff))) { // MAC Encoded
             mov_read_mac_string(c, pb, str_size, str, sizeof(str));
+        } else if (data_type == 13 || data_type == 14){
+            mov_extract_cover_pic(c->fc, pb, data_type, cover_size, str);
         } else {
             avio_read(pb, str, str_size);
             str[str_size] = 0;
+        }
+        // Android MP4 writer put an additional '/' at the end, discard it.
+        // The CTS test seems the added '/' is not needed.
+        if ((atom.type == MKTAG(0xa9,'x','y','z')) && (str[str_size-1] == 0x2f)) {
+            str[str_size-1] = 0;
         }
         av_dict_set(&c->fc->metadata, key, str, 0);
         if (*language && strcmp(language, "und")) {
@@ -1566,6 +1766,9 @@ static int mov_finalize_stsd_codec(MOVContext *c, AVIOContext *pb,
     case AV_CODEC_ID_VC1:
         st->need_parsing = AVSTREAM_PARSE_FULL;
         break;
+    case AV_CODEC_ID_HEVC:
+        st->need_parsing = AVSTREAM_PARSE_HEADERS;
+        break;
     default:
         break;
     }
@@ -2499,16 +2702,24 @@ static int mov_read_tkhd(MOVContext *c, AVIOContext *pb, MOVAtom atom)
     //Assign clockwise rotate values based on transform matrix so that
     //we can compensate for iPhone orientation during capture.
 
+    if (display_matrix[0][0] == 65536 && display_matrix[1][1] == 65536) {
+        av_dict_set(&st->metadata, "rotate", "0", 0);
+        st->rotation_degree = 0;
+    }
+    
     if (display_matrix[1][0] == -65536 && display_matrix[0][1] == 65536) {
          av_dict_set(&st->metadata, "rotate", "90", 0);
+         st->rotation_degree = 1;
     }
 
     if (display_matrix[0][0] == -65536 && display_matrix[1][1] == -65536) {
          av_dict_set(&st->metadata, "rotate", "180", 0);
+         st->rotation_degree = 2;
     }
 
     if (display_matrix[1][0] == 65536 && display_matrix[0][1] == -65536) {
          av_dict_set(&st->metadata, "rotate", "270", 0);
+         st->rotation_degree = 3;
     }
 
     // transform the display width/height according to the matrix
@@ -2902,6 +3113,49 @@ static int mov_read_uuid(MOVContext *c, AVIOContext *pb, MOVAtom atom)
     return 0;
 }
 
+static void mov_id32_date2year(AVDictionary **m)
+{
+    AVDictionaryEntry *t;
+    if (t = av_dict_get(*m, "date", t, AV_DICT_MATCH_CASE)) {
+        av_dict_set(m, "year", t->value, 0);
+        av_log(NULL, AV_LOG_INFO, "[%s:%d]========date:%s\n", __FUNCTION__, __LINE__, t->value);
+    }
+}
+
+static int mov_read_id32(MOVContext *c, AVIOContext *pb, MOVAtom atom)
+{
+    uint8_t version;
+    uint32_t flags;
+    uint8_t pad;
+    uint16_t langcode;
+    uint16_t shortbytes;
+    char language[4] = {0};
+    uint32_t str_size;
+    AVFormatContext *s = c->fc;
+    ID3v2ExtraMeta *id3v2_extra_meta = NULL;
+
+    str_size = atom.size;
+    version = avio_r8(pb); // version
+    flags = avio_rb24(pb); //flags
+    shortbytes = avio_rb16(pb);
+    pad = (shortbytes & 0x8000) >> 15;  //pad
+    langcode = shortbytes & 0x7ffff;    //language
+    ff_mov_lang_to_iso639(langcode, language);
+    str_size -= 6;
+    ff_id3v2_read(s, ID3v2_DEFAULT_MAGIC, &id3v2_extra_meta);
+    if (id3v2_extra_meta) {
+        int err = ff_id3v2_parse_apic(s, &id3v2_extra_meta);
+        if (err < 0) {
+            av_log(NULL, AV_LOG_INFO, "[%s:%d]ff_id3v2_parse_apic err:%d\n", __FUNCTION__, __LINE__, err);
+            return err;
+        }
+    }
+    ff_id3v2_free_extra_meta(&id3v2_extra_meta);
+    mov_id32_date2year(&s->metadata);
+
+    return 0;
+}
+
 static const MOVParseTableEntry mov_default_parse_table[] = {
 { MKTAG('A','C','L','R'), mov_read_avid },
 { MKTAG('A','P','R','G'), mov_read_avid },
@@ -2968,6 +3222,8 @@ static const MOVParseTableEntry mov_default_parse_table[] = {
 { MKTAG('h','v','c','C'), mov_read_glbl },
 { MKTAG('u','u','i','d'), mov_read_uuid },
 { MKTAG('C','i','n', 0x8e), mov_read_targa_y216 },
+{ MKTAG('I','D','3','2'), mov_read_id32 },
+
 { 0, NULL }
 };
 
@@ -3069,7 +3325,7 @@ static int mov_probe(AVProbeData *p)
     offset = 0;
     for (;;) {
         /* ignore invalid offset */
-        if ((offset + 8) > (unsigned int)p->buf_size)
+        if ((offset + 8) > p->buf_size)
             break;
         tag = AV_RL32(p->buf + offset + 4);
         switch(tag) {
@@ -3525,6 +3781,93 @@ static int mov_read_packet(AVFormatContext *s, AVPacket *pkt)
     return 0;
 }
 
+
+static int64_t mov_read_seek_sync(AVFormatContext *s,
+                      int stream_index,
+                      int64_t min_ts,
+                      int64_t target_ts,
+                      int64_t max_ts,
+                      int flags)
+{
+    int64_t pos, t_pos;
+
+    int64_t ts_ret, ts_adj;
+    int stream_index_gen_search = stream_index;
+    int sample, i;
+    AVStream *st;
+    AVParserState *backup;
+
+    backup = ff_store_parser_state(s);
+
+    // detect direction of seeking for search purposes
+    flags |= (target_ts - min_ts > (uint64_t)(max_ts - target_ts)) ?
+             AVSEEK_FLAG_BACKWARD : 0;
+
+    st = s->streams[stream_index_gen_search];
+    sample = av_index_search_timestamp(st, target_ts, AVSEEK_FLAG_ANY);
+    pos = st->index_entries[sample].pos;
+    target_ts = st->index_entries[sample].timestamp;
+    for (i = 0; i < s->nb_streams; i++) {
+        MOVStreamContext *sc = s->streams[i]->priv_data;
+        sc->current_sample = (sample - 500) > 0 ? (sample - 500) : 0;  // hard code for mov, repos the sample.
+    }
+
+    // search for actual matching keyframe/starting position for all streams
+    if ((t_pos = ff_gen_syncpoint_search(s, stream_index, pos,
+                                min_ts, target_ts, max_ts,
+                                flags)) < 0) {
+        ff_restore_parser_state(s, backup);
+        return -1;
+    }
+
+    ff_free_parser_state(s, backup);
+    return t_pos;
+}
+
+static int64_t mov_read_seek2(AVFormatContext *s, int stream_index, int64_t target_ts, int flags){
+    int ret;
+    if (flags & AVSEEK_FLAG_BACKWARD) {
+        flags &= ~AVSEEK_FLAG_BACKWARD;
+        ret = mov_read_seek_sync(s, stream_index, INT64_MIN, target_ts, target_ts, flags);
+        if (ret < 0) {
+            // for compatibility reasons, seek to the best-fitting timestamp
+            ret = mov_read_seek_sync(s, stream_index, INT64_MIN, target_ts, INT64_MAX, flags);
+        }
+    } else {
+        ret = mov_read_seek_sync(s, stream_index, target_ts, target_ts, INT64_MAX, flags);
+        if (ret < 0)
+            // for compatibility reasons, seek to the best-fitting timestamp
+            ret = mov_read_seek_sync(s, stream_index, INT64_MIN, target_ts, INT64_MAX, flags);
+    }
+    return ret;
+}
+
+static int mov_index_search_pos(const AVIndexEntry *entries, int nb_entries,
+                              int64_t pos, int flags)
+{
+    int a, b, m;
+    int64_t ppos;
+
+    a = - 1;
+    b = nb_entries;
+
+    //optimize appending index entries at the end
+    if(b && entries[b-1].pos < pos)
+        a= b-1;
+
+    while (b - a > 1) {
+        m = (a + b) >> 1;
+        ppos = entries[m].pos;
+        if(ppos >= pos)
+            b = m;
+        if(ppos <= pos)
+            a = m;
+    }
+
+    m= (flags & AVSEEK_FLAG_BACKWARD) ? a : b;
+    return  m;
+}
+
 static int mov_seek_stream(AVFormatContext *s, AVStream *st, int64_t timestamp, int flags)
 {
     MOVStreamContext *sc = st->priv_data;
@@ -3532,6 +3875,14 @@ static int mov_seek_stream(AVFormatContext *s, AVStream *st, int64_t timestamp, 
     int i;
 
     sample = av_index_search_timestamp(st, timestamp, flags);
+
+    // mov's stss is wrong sometimes, need to read seek
+    // added by senbai.tao
+    if(st->codec->codec_type == AVMEDIA_TYPE_VIDEO && sample <=0 && st->nb_index_entries && sc->keyframe_count <= 1) {
+        int64_t sync_point = mov_read_seek2(s, st->index, timestamp, flags);
+        sample = mov_index_search_pos(st->index_entries, st->nb_index_entries, sync_point, AVSEEK_FLAG_ANY);
+    }
+
     av_dlog(s, "stream %d, timestamp %"PRId64", sample %d\n", st->index, timestamp, sample);
     if (sample < 0 && st->nb_index_entries && timestamp < st->index_entries[0].timestamp)
         sample = 0;

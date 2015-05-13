@@ -32,6 +32,44 @@ typedef struct HEVCParseContext {
     ParseContext pc;
 } HEVCParseContext;
 
+
+//////////// copy from player_hwdec.c ///////////////////////
+static int check_size_in_buffer(unsigned char *p, int len)
+{
+    unsigned int size;
+    unsigned char *q = p;
+    while ((q + 4) < (p + len)) {
+        size = (*q << 24) | (*(q + 1) << 16) | (*(q + 2) << 8) | (*(q + 3));
+        if (size & 0xff000000) {
+            return 0;
+        }
+
+        if (q + size + 4 == p + len) {
+            return 1;
+        }
+
+        q += size + 4;
+    }
+    return 0;
+}
+
+static int check_size_in_buffer3(unsigned char *p, int len)
+{
+    unsigned int size;
+    unsigned char *q = p;
+    while ((q + 3) < (p + len)) {
+        size = (*q << 16) | (*(q + 1) << 8) | (*(q + 2));
+
+        if (q + size + 3 == p + len) {
+            return 1;
+        }
+
+        q += size + 3;
+    }
+    return 0;
+}
+////////////////////////////////////////////////
+
 /**
  * Find the end of the current frame in the bitstream.
  * @return the position of the first byte of the next frame, or END_NOT_FOUND
@@ -116,9 +154,20 @@ static inline int parse_nal_units(AVCodecParserContext *s,
 
     for (;;) {
         int src_length, consumed;
+        if (s->flags & PARSER_FLAG_COMPLETE_FRAMES) {
+            unsigned char *p = buf;
+            if (check_size_in_buffer(buf, buf_end -buf)) {
+                buf += 4;
+                goto PASS;
+            } else if (check_size_in_buffer3(buf, buf_end -buf)) {
+                buf += 3;
+                goto PASS;
+            }
+        }
         buf = avpriv_find_start_code(buf, buf_end, &state);
         if (--buf + 2 >= buf_end)
             break;
+PASS:
         src_length = buf_end - buf;
 
         h->nal_unit_type = (*buf >> 1) & 0x3f;
@@ -173,13 +222,13 @@ static inline int parse_nal_units(AVCodecParserContext *s,
 
             sh->pps_id = get_ue_golomb(gb);
             if (sh->pps_id >= MAX_PPS_COUNT || !h->pps_list[sh->pps_id]) {
-                av_log(h->avctx, AV_LOG_ERROR, "PPS id out of range: %d\n", sh->pps_id);
+                av_log(h->avctx, AV_LOG_DEBUG, "PPS id out of range: %d\n", sh->pps_id);
                 return AVERROR_INVALIDDATA;
             }
             h->pps = (HEVCPPS*)h->pps_list[sh->pps_id]->data;
 
             if (h->pps->sps_id >= MAX_SPS_COUNT || !h->sps_list[h->pps->sps_id]) {
-                av_log(h->avctx, AV_LOG_ERROR, "SPS id out of range: %d\n", h->pps->sps_id);
+                av_log(h->avctx, AV_LOG_DEBUG, "SPS id out of range: %d\n", h->pps->sps_id);
                 return AVERROR_INVALIDDATA;
             }
             if (h->sps != (HEVCSPS*)h->sps_list[h->pps->sps_id]->data) {

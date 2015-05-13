@@ -25,8 +25,10 @@
 /ffplay
 /ffprobe
 /ffserver
-/config.*
 /coverage.info
+/config.fate
+/config.log
+/config.mak
 /version.h
 /doc/*.1
 /doc/*.3
@@ -51,7 +53,6 @@
 /libavcodec/*_tablegen
 /libavcodec/*_tables.c
 /libavcodec/*_tables.h
-/libavutil/avconfig.h
 /tests/audiogen
 /tests/base64
 /tests/data/

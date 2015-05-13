@@ -210,11 +210,19 @@ static int decode_str(AVFormatContext *s, AVIOContext *pb, int encoding,
 
     switch (encoding) {
     case ID3v2_ENCODING_ISO8859:
+#if 0
         while (left && ch) {
             ch = avio_r8(pb);
             PUT_UTF8(ch, tmp, avio_w8(dynbuf, tmp);)
             left--;
         }
+#endif
+        while (left) {
+            int byte = (char)avio_r8(pb);
+            avio_w8(dynbuf, byte);
+            left--;
+        }
+
         break;
 
     case ID3v2_ENCODING_UTF16BOM:
@@ -236,6 +244,33 @@ static int decode_str(AVFormatContext *s, AVIOContext *pb, int encoding,
             *maxread = left;
             return AVERROR_INVALIDDATA;
         }
+
+        int i = 0;
+        int len = left / 2;
+        int tlen = left;
+        int eightBit = 1;
+        uint16_t *framedata = malloc(left+1);
+        memset(framedata, 0, left+1);
+        for (i = 0; i < len; i++) {
+            framedata[i] = get(pb);
+            left -= 2;
+            if (framedata[i] > 0xff) {
+                eightBit = 0;
+            }
+        }
+        if (eightBit) {
+            for (i = 0; i < len; i++) {
+                avio_w8(dynbuf, framedata[i]);
+            }
+            free(framedata);
+            break;
+        }
+        else {
+            free(framedata);
+            left = tlen - left;
+            avio_seek(pb, -left, SEEK_CUR);
+        }
+
         // fall-through
 
     case ID3v2_ENCODING_UTF16BE:
@@ -434,6 +469,61 @@ static void merge_date(AVDictionary **m)
 finish:
     if (date[0])
         av_dict_set(m, "date", date, 0);
+}
+
+static int parse_apic_tag(AVFormatContext *s, AVIOContext *pb, int taglen, const char *key, int flag)
+{
+    int cover_len = taglen;
+    char mime[32];
+    char dscrp[512];
+    int ret;
+	
+    if(s->cover_data){
+        av_log(s, AV_LOG_INFO, "Has parsed APIC tag!\n");
+        return 0;
+    }
+
+    if(flag) {
+        avio_r8(pb);  // Text encoding
+        cover_len --;
+        ret = avio_get_str(pb, cover_len, mime, sizeof(mime));  // MIME Type
+        cover_len -= ret;
+        avio_r8(pb);  // Picture Type
+        cover_len --;
+        ret = avio_get_str(pb, cover_len, dscrp, sizeof(dscrp));  // Description
+        cover_len -= ret;
+    } else {
+        avio_r8(pb);  // Text encoding
+        cover_len --;
+        ret = avio_get_str(pb, 3, mime, sizeof(mime));  // MIME Type
+        cover_len -= 3;
+        avio_r8(pb);  // Picture Type
+        cover_len --;
+        ret = avio_get_str(pb, cover_len, dscrp, sizeof(dscrp));  // Description
+        cover_len -= ret;
+    }
+	
+    s->cover_data = av_malloc(cover_len);
+    if(!s->cover_data){
+        av_log(s, AV_LOG_INFO, "no memery, av_alloc failed!\n");
+	 return -1;
+    }
+    if(!strcmp(mime,"image/jpeg")) {
+            av_log(NULL, AV_LOG_INFO, "cover is image/jpeg, first byte must be 0xff!\n");
+            do{
+                ret = avio_r8(pb);
+                cover_len --;           
+            }while(ret!=0xff& cover_len > 0);
+            avio_seek(pb, -1, SEEK_CUR);
+            cover_len ++;
+            av_log(NULL, AV_LOG_INFO, "[%s:%d]cover data offset=%llx ret=%x\n",  __FUNCTION__, __LINE__, avio_tell(pb));
+    }
+    s->cover_data_len = cover_len;
+    avio_read(pb, s->cover_data, cover_len);
+
+    av_dict_set(&s->metadata, "cover_pic", mime, 0);
+
+    return 0;
 }
 
 static void free_apic(void *obj)
@@ -786,6 +876,10 @@ static void id3v2_parse(AVFormatContext *s, int len, uint8_t version,
             if (tag[0] == 'T')
                 /* parse text tag */
                 read_ttag(s, pbx, tlen, &s->metadata, tag);
+            else if(tag[0] == 'A' && tag[1] == 'P' && tag[2] == 'I' && tag[3] == 'C')
+	     		parse_apic_tag(s, pbx, tlen, tag, isv34);
+            else if(tag[0] == 'P' && tag[1] == 'I' && tag[2] == 'C')
+	     		parse_apic_tag(s, pbx, tlen, tag, isv34);
             else
                 /* parse special meta tag */
                 extra_func->read(s, pbx, tlen, tag, extra_meta);

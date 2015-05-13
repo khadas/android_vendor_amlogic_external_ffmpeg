@@ -217,6 +217,10 @@ static int flv_same_video_codec(AVCodecContext *vcodec, int flags)
         return vcodec->codec_id == AV_CODEC_ID_VP6A;
     case FLV_CODECID_H264:
         return vcodec->codec_id == AV_CODEC_ID_H264;
+    case FLV_CODECID_HM91:
+    case FLV_CODECID_HM10:
+    case FLV_CODECID_HM12:
+        return vcodec->codec_id == AV_CODEC_ID_HEVC;
     default:
         return vcodec->codec_tag == flv_codecid;
     }
@@ -259,6 +263,11 @@ static int flv_set_video_codec(AVFormatContext *s, AVStream *vstream,
         return 3;     // not 4, reading packet type will consume one byte
     case FLV_CODECID_MPEG4:
         vcodec->codec_id = AV_CODEC_ID_MPEG4;
+        return 3;
+    case FLV_CODECID_HM91:
+    case FLV_CODECID_HM10:
+    case FLV_CODECID_HM12:
+        vcodec->codec_id = AV_CODEC_ID_HEVC;
         return 3;
     default:
         avpriv_request_sample(s, "Video codec (%x)", flv_codecid);
@@ -611,6 +620,55 @@ static int flv_read_close(AVFormatContext *s)
     return 0;
 }
 
+/***************** defined for lentoid hevc ************************/
+static const uint8_t nal_start_code[] = {0x00, 0x00, 0x00, 0x01};
+static void flv_extradata_process(AVStream *st)
+{
+    int len = 1024, offset = 6;
+    uint8_t * buf = av_malloc(len);
+    uint8_t * buf_t = buf;
+    uint8_t * ptr = st->codec->extradata;
+    int size_0, size_1, size;
+    len = 0;
+    int count=0;
+    while(st->codec->extradata_size - offset > 0) {
+        count++;
+        size_0 = (*(ptr+offset)&0xFF)*0x100;
+        size_1 = *(ptr+offset+1)&0xFF;
+        size = size_0+size_1;
+        if(count==2)
+            size += 1;    // very ugly
+        memcpy(buf_t, nal_start_code, 4);
+        buf_t += 4;
+        memcpy(buf_t, ptr+offset+2, size);
+        buf_t += size;
+        offset = offset+size+2;
+        len = len+size+4;
+    }
+    st->codec->extradata = av_realloc(st->codec->extradata, len);
+    memcpy(st->codec->extradata, buf, len);
+    st->codec->extradata_size = len;
+    av_free(buf);
+}
+
+
+static int flv_get_hevc_packet(AVFormatContext *s, AVPacket *pkt, int size)
+{
+    int len =0;
+    int ret = av_new_packet(pkt, size);
+    if(ret < 0)
+        return ret;
+    int offset = 0;
+    while(size-offset > 0) {
+        len = avio_rb32(s->pb);
+        memcpy(pkt->data+offset, nal_start_code, 4);
+        len = avio_read(s->pb, pkt->data+offset+4, len);
+        offset = offset+len+4;
+    }
+    return 0;
+}
+/***************** defined for lentoid hevc ************************/
+
 static int flv_get_extradata(AVFormatContext *s, AVStream *st, int size)
 {
     av_free(st->codec->extradata);
@@ -927,10 +985,12 @@ retry_duration:
 
     if (st->codec->codec_id == AV_CODEC_ID_AAC ||
         st->codec->codec_id == AV_CODEC_ID_H264 ||
-        st->codec->codec_id == AV_CODEC_ID_MPEG4) {
+        st->codec->codec_id == AV_CODEC_ID_MPEG4 ||
+        st->codec->codec_id == AV_CODEC_ID_HEVC) {
         int type = avio_r8(s->pb);
         size--;
-        if (st->codec->codec_id == AV_CODEC_ID_H264 || st->codec->codec_id == AV_CODEC_ID_MPEG4) {
+        if (st->codec->codec_id == AV_CODEC_ID_H264 || st->codec->codec_id == AV_CODEC_ID_MPEG4 ||
+        st->codec->codec_id == AV_CODEC_ID_HEVC) {
             // sign extension
             int32_t cts = (avio_rb24(s->pb) + 0xff800000) ^ 0xff800000;
             pts = dts + cts;
@@ -951,6 +1011,10 @@ retry_duration:
             }
             if ((ret = flv_get_extradata(s, st, size)) < 0)
                 return ret;
+
+            if(st->codec->codec_id == AV_CODEC_ID_HEVC) {
+                flv_extradata_process(st);
+            }
             if (st->codec->codec_id == AV_CODEC_ID_AAC && 0) {
                 MPEG4AudioConfig cfg;
                 if (avpriv_mpeg4audio_get_config(&cfg, st->codec->extradata,
@@ -977,7 +1041,11 @@ retry_duration:
         goto leave;
     }
 
-    ret = av_get_packet(s->pb, pkt, size);
+    if(st->codec->codec_id == AV_CODEC_ID_HEVC) {
+        ret = flv_get_hevc_packet(s, pkt, size);
+    } else {
+        ret = av_get_packet(s->pb, pkt, size);
+    }
     if (ret < 0)
         return ret;
     pkt->dts          = dts;

@@ -125,6 +125,8 @@ struct MpegTSContext {
     /** to detect seek                                       */
     int64_t last_pos;
 
+    int64_t first_pcrscr;
+
     /******************************************/
     /* private mpegts data */
     /* scan context */
@@ -2145,6 +2147,8 @@ static int mpegts_read_header(AVFormatContext *s)
     int len;
     int64_t pos;
 
+    ts->first_pcrscr=AV_NOPTS_VALUE;
+
     ffio_ensure_seekback(pb, s->probesize);
 
     /* read the first 8192 bytes to get packet size */
@@ -2381,7 +2385,7 @@ static int64_t mpegts_get_dts(AVFormatContext *s, int stream_index,
         if(ret < 0)
             return AV_NOPTS_VALUE;
         av_free_packet(&pkt);
-        if(pkt.dts != AV_NOPTS_VALUE && pkt.pos >= 0){
+        if(pkt.dts != AV_NOPTS_VALUE && pkt.pos >= 0 && (pkt.flags & AV_PKT_FLAG_KEY)){
             ff_reduce_index(s, pkt.stream_index);
             av_add_index_entry(s->streams[pkt.stream_index], pkt.pos, pkt.dts, 0, 0, AVINDEX_KEYFRAME /* FIXME keyframe? */);
             if(pkt.stream_index == stream_index && pkt.pos >= *ppos){
@@ -2394,6 +2398,89 @@ static int64_t mpegts_get_dts(AVFormatContext *s, int stream_index,
 
     return AV_NOPTS_VALUE;
 }
+
+static int read_seek2(AVFormatContext *s,
+                      int stream_index,
+                      int64_t min_ts,
+                      int64_t target_ts,
+                      int64_t max_ts,
+                      int flags)
+{
+    int64_t pos;
+
+    int64_t ts_ret, ts_adj;
+    int stream_index_gen_search;
+    AVStream *st;
+    AVParserState *backup;
+
+    backup = ff_store_parser_state(s);
+
+    // detect direction of seeking for search purposes
+    flags |= (target_ts - min_ts > (uint64_t)(max_ts - target_ts)) ?
+             AVSEEK_FLAG_BACKWARD : 0;
+
+    if (flags & AVSEEK_FLAG_BYTE) {
+        // use position directly, we will search starting from it
+        pos = target_ts;
+    } else {
+        // search for some position with good timestamp match
+        if (stream_index < 0) {
+            stream_index_gen_search = av_find_default_stream_index(s);
+            if (stream_index_gen_search < 0) {
+                ff_restore_parser_state(s, backup);
+                return -1;
+            }
+
+            st = s->streams[stream_index_gen_search];
+            // timestamp for default must be expressed in AV_TIME_BASE units
+            ts_adj = av_rescale(target_ts,
+                                st->time_base.den,
+                                AV_TIME_BASE * (int64_t)st->time_base.num);
+        } else {
+            ts_adj = target_ts;
+            stream_index_gen_search = stream_index;
+        }
+        pos = ff_gen_search(s, stream_index_gen_search, ts_adj,
+                            0, INT64_MAX, -1,
+                            AV_NOPTS_VALUE,
+                            AV_NOPTS_VALUE,
+                            flags, &ts_ret, mpegts_get_dts);
+        if (pos < 0) {
+            ff_restore_parser_state(s, backup);
+            return -1;
+        }
+    }
+
+    // search for actual matching keyframe/starting position for all streams
+    if (ff_gen_syncpoint_search(s, stream_index, pos,
+                                min_ts, target_ts, max_ts,
+                                flags) < 0) {
+        ff_restore_parser_state(s, backup);
+        return -1;
+    }
+
+    ff_free_parser_state(s, backup);
+    return 0;
+}
+
+static int mpegts_read_seek(AVFormatContext *s, int stream_index, int64_t target_ts, int flags){
+    int ret;
+    if (flags & AVSEEK_FLAG_BACKWARD) {
+        flags &= ~AVSEEK_FLAG_BACKWARD;
+        ret = read_seek2(s, stream_index, INT64_MIN, target_ts, target_ts, flags);
+        if (ret < 0) {
+            // for compatibility reasons, seek to the best-fitting timestamp
+            ret = read_seek2(s, stream_index, INT64_MIN, target_ts, INT64_MAX, flags);
+        }
+    } else {
+        ret = read_seek2(s, stream_index, target_ts, target_ts, INT64_MAX, flags);
+        if (ret < 0)
+            // for compatibility reasons, seek to the best-fitting timestamp
+            ret = read_seek2(s, stream_index, INT64_MIN, target_ts, INT64_MAX, flags);
+    }
+    return ret;
+}
+
 
 /**************************************************************/
 /* parsing functions - called from other demuxers such as RTP */
@@ -2456,8 +2543,9 @@ AVInputFormat ff_mpegts_demuxer = {
     .read_header    = mpegts_read_header,
     .read_packet    = mpegts_read_packet,
     .read_close     = mpegts_read_close,
+    .read_seek     = mpegts_read_seek,
     .read_timestamp = mpegts_get_dts,
-    .flags          = AVFMT_SHOW_IDS | AVFMT_TS_DISCONT,
+    .flags          = AVFMT_SHOW_IDS | AVFMT_TS_DISCONT | AVFMT_GENERIC_INDEX,
     .priv_class     = &mpegts_class,
 };
 
@@ -2468,7 +2556,8 @@ AVInputFormat ff_mpegtsraw_demuxer = {
     .read_header    = mpegts_read_header,
     .read_packet    = mpegts_raw_read_packet,
     .read_close     = mpegts_read_close,
+    .read_seek     = mpegts_read_seek,
     .read_timestamp = mpegts_get_dts,
-    .flags          = AVFMT_SHOW_IDS | AVFMT_TS_DISCONT,
+    .flags          = AVFMT_SHOW_IDS | AVFMT_TS_DISCONT | AVFMT_GENERIC_INDEX,
     .priv_class     = &mpegtsraw_class,
 };
