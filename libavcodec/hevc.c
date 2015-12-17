@@ -2296,6 +2296,7 @@ int ff_hevc_extract_rbsp(HEVCContext *s, const uint8_t *src, int length,
                 dst[di++] = 0;
                 si       += 3;
 
+#if 0
                 s->skipped_bytes++;
                 if (s->skipped_bytes_pos_size < s->skipped_bytes) {
                     s->skipped_bytes_pos_size *= 2;
@@ -2307,6 +2308,7 @@ int ff_hevc_extract_rbsp(HEVCContext *s, const uint8_t *src, int length,
                 }
                 if (s->skipped_bytes_pos)
                     s->skipped_bytes_pos[s->skipped_bytes-1] = di - 1;
+#endif
                 continue;
             } else // next start code
                 goto nsc;
