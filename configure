@@ -1514,6 +1514,7 @@ HAVE_LIST="
     sarestart
     sched_getaffinity
     sdl
+    section_data_rel_ro
     SetConsoleTextAttribute
     setmode
     setrlimit
@@ -3635,6 +3636,7 @@ case $target_os in
         add_cppflags -U__STRICT_ANSI__
         ;;
     linux)
+        enable section_data_rel_ro
         enable dv1394
         ;;
     irix*)

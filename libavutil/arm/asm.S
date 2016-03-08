@@ -79,12 +79,16 @@ ELF     .type   \name, %function
 \name:
 .endm
 
-.macro  const   name, align=2
+.macro  const   name, align=2, relocate=0
     .macro endconst
 ELF     .size   \name, . - \name
         .purgem endconst
     .endm
+.if HAVE_SECTION_DATA_REL_RO && \relocate
+        .section        .data.rel.ro
+.else
         .section        .rodata
+.endif
         .align          \align
 \name:
 .endm
