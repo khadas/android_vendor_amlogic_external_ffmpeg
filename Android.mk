@@ -1204,8 +1204,7 @@ LOCAL_SRC_FILES := \
     $(FFMPEG_LIBAVFORMAT_SRC_FILES) \
     $(FFMPEG_LIBSWSCALE_SRC_FILES)
 
-LOCAL_SRC_FILES_arm := \
-    $(FFMPEG_LOCAL_SRC_FILES_armv7-a-neon) \
+#LOCAL_SRC_FILES_arm := \
     libavutil/arm/asm.S \
     libavutil/arm/cpu.c \
     libavutil/arm/float_dsp_init_arm.c \
