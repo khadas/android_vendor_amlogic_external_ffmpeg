@@ -1194,6 +1194,8 @@ LOCAL_CFLAGS_arm := $(FFMPEG_CFLAGS_armv7-a-neon)
 
 LOCAL_CFLAGS_32 := -DARCH_ARM
 
+LOCAL_CLANG_ASFLAGS_arm += -no-integrated-as
+
 LOCAL_LDFLAGS += $(FFMPEG_LDFLAGS)
 
 LOCAL_LDFLAGS_arm := -Wl,--no-warn-shared-textrel
@@ -1204,7 +1206,8 @@ LOCAL_SRC_FILES := \
     $(FFMPEG_LIBAVFORMAT_SRC_FILES) \
     $(FFMPEG_LIBSWSCALE_SRC_FILES)
 
-#LOCAL_SRC_FILES_arm := \
+LOCAL_SRC_FILES_arm := \
+    $(FFMPEG_LOCAL_SRC_FILES_armv7-a-neon) \
     libavutil/arm/asm.S \
     libavutil/arm/cpu.c \
     libavutil/arm/float_dsp_init_arm.c \
