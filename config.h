@@ -11,8 +11,19 @@
 #define EXTERN_ASM 
 #define SLIBSUF ".so"
 #define HAVE_MMX2 HAVE_MMXEXT
+#ifdef ARCH_AARCH64
+#undef ARCH_AARCH64
+#define ARCH_AARCH64 1
+#else
+#define ARCH_AARCH64 0
+#endif
 #define ARCH_ALPHA 0
+#ifdef ARCH_ARM
+#undef ARCH_ARM
+#define ARCH_ARM 1
+#else
 #define ARCH_ARM 0
+#endif
 #define ARCH_AVR32 0
 #define ARCH_AVR32_AP 0
 #define ARCH_AVR32_UC 0
@@ -34,12 +45,12 @@
 #define ARCH_X86 0
 #define ARCH_X86_32 0
 #define ARCH_X86_64 0
-#define HAVE_ARMV5TE 0
-#define HAVE_ARMV6 0
-#define HAVE_ARMV6T2 0
-#define HAVE_NEON 0
-#define HAVE_VFP 0
-#define HAVE_VFPV3 0
+#define HAVE_ARMV5TE 1
+#define HAVE_ARMV6 1
+#define HAVE_ARMV6T2 1
+#define HAVE_NEON 1
+#define HAVE_VFP 1
+#define HAVE_VFPV3 1
 #define HAVE_AMD3DNOW 0
 #define HAVE_AMD3DNOWEXT 0
 #define HAVE_AVX 0
@@ -389,7 +400,7 @@
 #define CONFIG_DWT 1
 #define CONFIG_ERROR_RESILIENCE 1
 #define CONFIG_FAST_UNALIGNED 1
-#define CONFIG_FFT 0
+#define CONFIG_FFT 1
 #define CONFIG_FTRAPV 0
 #define CONFIG_GPL 0
 #define CONFIG_GRAY 0
