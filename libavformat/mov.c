@@ -3185,7 +3185,7 @@ static int mov_read_uuid(MOVContext *c, AVIOContext *pb, MOVAtom atom)
 
 static void mov_id32_date2year(AVDictionary **m)
 {
-    AVDictionaryEntry *t;
+    AVDictionaryEntry *t = NULL;
     if (t = av_dict_get(*m, "date", t, AV_DICT_MATCH_CASE)) {
         av_dict_set(m, "year", t->value, 0);
         av_log(NULL, AV_LOG_INFO, "[%s:%d]========date:%s\n", __FUNCTION__, __LINE__, t->value);
