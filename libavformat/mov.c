@@ -183,6 +183,7 @@ static int mov_read_custom_metadata(MOVContext *c, AVIOContext *pb, MOVAtom atom
 
     if (*key && *data) {
         if (strcmp(key, "iTunSMPB") == 0) {
+            av_dict_set(&st->metadata, key, data, 0);
             int priming, remainder, samples;
             if(sscanf(data, "%*X %X %X %X", &priming, &remainder, &samples) == 3){
                 if(priming>0 && priming<16384)

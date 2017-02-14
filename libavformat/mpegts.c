@@ -639,6 +639,7 @@ static const StreamType REGD_types[] = {
     { MKTAG('H','E','V','C'), AVMEDIA_TYPE_VIDEO,  AV_CODEC_ID_HEVC },
     { MKTAG('K','L','V','A'), AVMEDIA_TYPE_DATA,    AV_CODEC_ID_SMPTE_KLV },
     { MKTAG('V','C','-','1'), AVMEDIA_TYPE_VIDEO,   AV_CODEC_ID_VC1 },
+    { MKTAG('D','R','A','1'), AVMEDIA_TYPE_AUDIO,   AV_CODEC_ID_DRA },
     { 0 },
 };
 
@@ -729,7 +730,53 @@ static int mpegts_set_stream_info(AVStream *st, PESContext *pes,
             sub_st->need_parsing = AVSTREAM_PARSE_FULL;
             sub_pes->sub_st = pes->sub_st = sub_st;
         }
+        if (pes->stream_type == 0x81) {
+                // HDMV AC3 streams also contain an TRUEHD coded version of the
+                // audio track - add a second stream for this
+                AVStream *sub_st;
+                // priv_data cannot be shared between streams
+                PESContext *sub_pes = av_malloc(sizeof(*sub_pes));
+                if (!sub_pes)
+                        return AVERROR(ENOMEM);
+                memcpy(sub_pes, pes, sizeof(*sub_pes));
+
+                sub_st = avformat_new_stream(pes->stream, NULL);
+                if (!sub_st) {
+                        av_free(sub_pes);
+                        return AVERROR(ENOMEM);
+                }
+
+                sub_st->id = pes->pid;
+                avpriv_set_pts_info(sub_st, 33, 1, 90000);
+                sub_st->priv_data = sub_pes;
+                sub_st->codec->codec_type = AVMEDIA_TYPE_AUDIO;
+                sub_st->codec->codec_id   = AV_CODEC_ID_TRUEHD;
+                sub_st->need_parsing = AVSTREAM_PARSE_FULL;
+                sub_st->discard = AVDISCARD_ALL;
+                sub_pes->sub_st = pes->sub_st = sub_st;
+        }
     }
+    if (st->codec->codec_id == AV_CODEC_ID_NONE && pes->stream_type == 0x82) {
+            AVStream *sub_st;
+            PESContext *sub_pes = av_malloc(sizeof(*sub_pes));
+            if (!sub_pes)
+                    return AVERROR(ENOMEM);
+            memcpy(sub_pes, pes, sizeof(*sub_pes));
+            sub_st = avformat_new_stream(pes->stream, NULL);
+            if (!sub_st) {
+                    av_free(sub_pes);
+                    return AVERROR(ENOMEM);
+            }
+
+            sub_st->id = pes->pid;
+            av_set_pts_info(sub_st, 33, 1, 90000);
+            sub_st->priv_data = sub_pes;
+            sub_st->codec->codec_type = AVMEDIA_TYPE_AUDIO;
+            sub_st->codec->codec_id   = CODEC_ID_DTS;
+            sub_st->need_parsing = AVSTREAM_PARSE_FULL;
+            sub_pes->sub_st = pes->sub_st = sub_st;
+    }
+
     if (st->codec->codec_id == AV_CODEC_ID_NONE)
         mpegts_find_stream_type(st, pes->stream_type, MISC_types);
     if (st->codec->codec_id == AV_CODEC_ID_NONE){
@@ -757,6 +804,8 @@ static void new_pes_packet(PESContext *pes, AVPacket *pkt)
 
     // Separate out the AC3 substream from an HDMV combined TrueHD/AC3 PID
     if (pes->sub_st && pes->stream_type == 0x83 && pes->extended_stream_id == 0x76)
+        pkt->stream_index = pes->sub_st->index;
+    else if (pes->sub_st && pes->stream_type == 0x81 && pes->extended_stream_id == 0x72)
         pkt->stream_index = pes->sub_st->index;
     else
         pkt->stream_index = pes->st->index;
@@ -1659,7 +1708,7 @@ static void pmt_cb(MpegTSFilter *filter, const uint8_t *section, int section_len
                 mp4_descr, mp4_descr_count, pid, ts) < 0)
                 break;
 
-            if (pes && prog_reg_desc == AV_RL32("HDMV") && stream_type == 0x83 && pes->sub_st) {
+            if (pes && prog_reg_desc == AV_RL32("HDMV") && (stream_type == 0x83 || stream_type == 0x81) && pes->sub_st) {
                 ff_program_add_stream_index(ts->stream, h->id, pes->sub_st->index);
                 pes->sub_st->codec->codec_tag = st->codec->codec_tag;
             }
