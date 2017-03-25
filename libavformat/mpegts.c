@@ -2467,7 +2467,7 @@ static int read_seek2(AVFormatContext *s,
     // detect direction of seeking for search purposes
     flags |= (target_ts - min_ts > (uint64_t)(max_ts - target_ts)) ?
              AVSEEK_FLAG_BACKWARD : 0;
-
+    av_log(NULL, AV_LOG_INFO, "read_seek::target_ts %lld , max_ts %lld ,flags %d streameindex %d\n", target_ts,max_ts,flags,stream_index);
     if (flags & AVSEEK_FLAG_BYTE) {
         // use position directly, we will search starting from it
         pos = target_ts;
@@ -2475,6 +2475,7 @@ static int read_seek2(AVFormatContext *s,
         // search for some position with good timestamp match
         if (stream_index < 0) {
             stream_index_gen_search = av_find_default_stream_index(s);
+            av_log(NULL, AV_LOG_INFO, "read_seek::stream_index_gen_search %d\n", stream_index_gen_search);
             if (stream_index_gen_search < 0) {
                 ff_restore_parser_state(s, backup);
                 return -1;
@@ -2494,12 +2495,13 @@ static int read_seek2(AVFormatContext *s,
                             AV_NOPTS_VALUE,
                             AV_NOPTS_VALUE,
                             flags, &ts_ret, mpegts_get_dts);
+        av_log(NULL, AV_LOG_INFO, "read_seek::stream_index_gen_search %d ts_adj %lld pos %lld \n", stream_index_gen_search,ts_adj,pos);
         if (pos < 0) {
             ff_restore_parser_state(s, backup);
             return -1;
         }
     }
-
+/*  ==> modify by amlogic  this is a slow when seek
     // search for actual matching keyframe/starting position for all streams
     if (ff_gen_syncpoint_search(s, stream_index, pos,
                                 min_ts, target_ts, max_ts,
@@ -2507,7 +2509,8 @@ static int read_seek2(AVFormatContext *s,
         ff_restore_parser_state(s, backup);
         return -1;
     }
-
+*/
+    avio_seek(s->pb, pos, SEEK_SET);
     ff_free_parser_state(s, backup);
     return 0;
 }
