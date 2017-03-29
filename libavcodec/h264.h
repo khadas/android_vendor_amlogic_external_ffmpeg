@@ -115,7 +115,10 @@ enum {
     NAL_END_STREAM,
     NAL_FILLER_DATA,
     NAL_SPS_EXT,
+    NAL_PREFIX   = 14,
+    NAL_SUB_SPS,
     NAL_AUXILIARY_SLICE = 19,
+    NAL_SLC_EXT,
     NAL_FF_IGNORE       = 0xff0f001,
 };
 
