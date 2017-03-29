@@ -4964,6 +4964,14 @@ again:
             case NAL_SPS_EXT:
             case NAL_AUXILIARY_SLICE:
                 break;
+            case NAL_PREFIX:
+            case NAL_SUB_SPS:
+            case NAL_SLC_EXT:
+                /*0x1b is ts avc stream type set mvc once*/
+                if (avctx->codec_tag == 0x1b) {
+                    avctx->codec_tag = MKTAG('M', 'V', 'C', ' ');
+                }
+                break;
             case NAL_FF_IGNORE:
                 break;
             default:
