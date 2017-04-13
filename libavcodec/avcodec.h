@@ -1135,6 +1135,33 @@ enum AVFieldOrder {
     AV_FIELD_BT,          //< Bottom coded first, top displayed first
 };
 
+typedef struct AVHDRMetadata {
+    /**
+     * CIE 1931 xy chromaticity coords of color primaries (r, g, b order).
+     */
+    uint16_t display_primaries[3][2];
+
+    /**
+     * CIE 1931 xy chromaticity coords of white point.
+     */
+    uint16_t white_point[2];
+
+    /**
+     * Min luminance of mastering display (cd/m^2).
+     */
+    uint32_t min_luminance;
+
+    /**
+     * Max luminance of mastering display (cd/m^2).
+     */
+    uint32_t max_luminance;
+
+    uint16_t max_cll;
+
+    uint16_t max_pall;
+
+} AVHDRMetadata;
+
 /**
  * main external API structure.
  * New fields can be added to the end with minor version bumps.
@@ -2898,6 +2925,9 @@ typedef struct AVCodecContext {
      * - encoding: set by libavcodec
      */
     int seek_preroll;
+
+    int has_hdr_metadata;
+    AVHDRMetadata hdr_metadata;
 } AVCodecContext;
 
 AVRational av_codec_get_pkt_timebase         (const AVCodecContext *avctx);

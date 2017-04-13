@@ -872,6 +872,15 @@ typedef struct HEVCContext {
     int nal_length_size;  ///< Number of bytes used for nal length (1, 2 or 4)
     int nuh_layer_id;
 
+        /** mastering display */
+    int sei_mastering_display_info_present;
+    uint16_t display_primaries[3][2];
+    uint16_t white_point[2];
+    uint32_t max_mastering_luminance;
+    uint32_t min_mastering_luminance;
+    uint16_t max_content_light_level;
+    uint16_t max_pic_average_light_level;
+
 } HEVCContext;
 
 int ff_hevc_decode_short_term_rps(HEVCContext *s, ShortTermRPS *rps,
