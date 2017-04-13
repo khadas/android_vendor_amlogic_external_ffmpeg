@@ -77,6 +77,44 @@ static void decode_nal_sei_frame_packing_arrangement(HEVCLocalContext *lc)
     skip_bits1(gb);                         // upsampled_aspect_ratio_flag
 }
 
+static int decode_nal_sei_mastering_display_info(HEVCContext *s)
+{
+    GetBitContext *gb = &s->HEVClc->gb;
+    int i;
+    av_log(s->avctx, AV_LOG_DEBUG, "decode_nal_sei_mastering_display_info\n");
+
+    // Mastering primaries
+    for (i = 0; i < 3; i++) {
+        s->display_primaries[i][0] = get_bits(gb, 16);
+        s->display_primaries[i][1] = get_bits(gb, 16);
+    }
+    // White point (x, y)
+    s->white_point[0] = get_bits(gb, 16);
+    s->white_point[1] = get_bits(gb, 16);
+
+    // Max and min luminance of mastering display
+    s->max_mastering_luminance = get_bits_long(gb, 32);
+    s->min_mastering_luminance = get_bits_long(gb, 32);
+
+    // As this SEI message comes before the first frame that references it,
+    // initialize the flag to 2 and decrement on IRAP access unit so it
+    // persists for the coded video sequence (e.g., between two IRAPs)
+    s->sei_mastering_display_info_present = 2;
+    return 0;
+}
+
+static int decode_nal_sei_content_light_level(HEVCContext *s)
+{
+    GetBitContext *gb = &s->HEVClc->gb;
+
+    av_log(s->avctx, AV_LOG_DEBUG, "decode_nal_sei_content_light_level\n");
+
+    s->max_content_light_level = get_bits(gb, 16);
+    s->max_pic_average_light_level = get_bits(gb, 16);
+
+    return 0;
+}
+
 static int decode_nal_sei_message(HEVCContext *s)
 {
     GetBitContext *gb = &s->HEVClc->gb;
@@ -100,6 +138,10 @@ static int decode_nal_sei_message(HEVCContext *s)
             decode_nal_sei_decoded_picture_hash(s, payload_size);
         else if (payload_type == 45)
             decode_nal_sei_frame_packing_arrangement(s->HEVClc);
+        else if (payload_type == 137) /* hdr info*/
+            decode_nal_sei_mastering_display_info(s);
+        else if (payload_type == 144) /* ContentLightLevel*/
+            decode_nal_sei_content_light_level(s);
         else {
             av_log(s->avctx, AV_LOG_DEBUG, "Skipped PREFIX SEI %d\n", payload_type);
             skip_bits(gb, 8*payload_size);

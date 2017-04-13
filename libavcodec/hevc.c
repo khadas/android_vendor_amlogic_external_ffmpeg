@@ -2034,6 +2034,54 @@ static void restore_tqb_pixels(HEVCContext *s)
     }
 }
 
+
+static int set_hdr_data(HEVCContext *s)
+{
+    AVFrame *out = s->ref->frame;
+
+    if (s->sei_mastering_display_info_present) {
+        // HEVC uses a g,b,r ordering, which we convert to a more natural r,g,b
+        const int mapping[3] = {2, 0, 1};
+        const int chroma_den = 50000;
+        const int luma_den = 10000;
+        int i;
+        AVHDRMetadata* metadata = &s->avctx->hdr_metadata;
+
+        for (i = 0; i < 3; i++) {
+            const int j = mapping[i];
+            metadata->display_primaries[i][0] = s->display_primaries[j][0];
+            metadata->display_primaries[i][1] = s->display_primaries[j][1];
+        }
+        metadata->white_point[0] = s->white_point[0];
+        metadata->white_point[1] = s->white_point[1];
+
+        metadata->max_luminance = s->max_mastering_luminance;
+        metadata->min_luminance = s->min_mastering_luminance;
+
+        metadata->max_cll = s->max_content_light_level;
+        metadata->max_pall = s->max_pic_average_light_level;
+
+        av_log(s->avctx, AV_LOG_DEBUG, "Mastering Display Metadata:\n");
+        av_log(s->avctx, AV_LOG_DEBUG,
+               "r(%x,%x) g(%x,%x) b(%x,%x) wp(%x,%x)\n",
+               metadata->display_primaries[0][0],
+               metadata->display_primaries[0][1],
+               metadata->display_primaries[1][0],
+               metadata->display_primaries[1][1],
+               metadata->display_primaries[2][0],
+               metadata->display_primaries[2][1],
+               metadata->white_point[0], metadata->white_point[1]);
+        av_log(s->avctx, AV_LOG_DEBUG,
+               "min_luminance=%x, max_luminance=%x\n",
+               metadata->min_luminance, metadata->max_luminance);
+
+        s->avctx->has_hdr_metadata = 1;
+    }
+
+    return 0;
+}
+
+
 static int hevc_frame_start(HEVCContext *s)
 {
     HEVCLocalContext *lc     = s->HEVClc;
@@ -2067,6 +2115,10 @@ static int hevc_frame_start(HEVCContext *s)
         av_log(s->avctx, AV_LOG_ERROR, "Error constructing the frame RPS.\n");
         goto fail;
     }
+
+    ret = set_hdr_data(s);
+    if (ret < 0)
+        goto fail;
 
     av_frame_unref(s->output_frame);
     ret = ff_hevc_output_frame(s, s->output_frame, 0);
