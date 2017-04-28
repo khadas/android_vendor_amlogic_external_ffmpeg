@@ -70,6 +70,13 @@ const char *avformat_license(void)
     return LICENSE_PREFIX FFMPEG_LICENSE + sizeof(LICENSE_PREFIX) - 1;
 }
 
+int64_t avformat_getcurtime_us(void)
+{
+    struct timespec timeval;
+    clock_gettime(CLOCK_MONOTONIC, &timeval);
+    return ((int64_t)timeval.tv_nsec / 1000 + (int64_t)timeval.tv_sec * 1000000);
+}
+
 #define RELATIVE_TS_BASE (INT64_MAX - (1LL<<48))
 
 static int is_relative(int64_t ts) {
@@ -1304,12 +1311,17 @@ static int read_from_packet_buffer(AVPacketList **pkt_buffer,
 static int read_frame_internal(AVFormatContext *s, AVPacket *pkt)
 {
     int ret = 0, i, got_packet = 0;
-
+    int64_t first_timeval = avformat_getcurtime_us();
     av_init_packet(pkt);
 
     while (!got_packet && !s->parse_queue) {
         AVStream *st;
         AVPacket cur_pkt;
+        if (s->pb->mediascan_flag) {
+            if (avformat_getcurtime_us() > (first_timeval + s->max_analyze_duration)) {
+                return -1;
+            }
+        }
 
         /* read next packet */
         ret = ff_read_packet(s, &cur_pkt);
