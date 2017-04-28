@@ -146,6 +146,8 @@ typedef struct AVIOContext {
      * This field is internal to libavformat and access from outside is not allowed.
      */
     int writeout_count;
+
+    int mediascan_flag;
 } AVIOContext;
 
 /* unbuffered I/O */
@@ -332,6 +334,7 @@ int avio_get_str16be(AVIOContext *pb, int maxlen, char *buf, int buflen);
 #define AVIO_FLAG_READ  1                                      /**< read-only */
 #define AVIO_FLAG_WRITE 2                                      /**< write-only */
 #define AVIO_FLAG_READ_WRITE (AVIO_FLAG_READ|AVIO_FLAG_WRITE)  /**< read-write pseudo flag */
+
 /**
  * @}
  */
