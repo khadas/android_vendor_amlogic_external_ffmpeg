@@ -175,58 +175,12 @@ const char * const ff_id3v1_genre_str[ID3v1_GENRE_MAX + 1] = {
     [147] = "SynthPop",
 };
 
-static void convert_iso8859_to_string(const uint8_t *data, int size, char *s) {
-    int utf8len = 0;
-    int i;
-	
-    for (i = 0; i < size; ++i) {
-        if (data[i] == '\0') {
-            size = i;
-            break;
-        } else if (data[i] < 0x80) {
-            ++utf8len;
-        } else {
-            utf8len += 2;
-        }
-    }
-
-    if (utf8len == size) {
-        // Only ASCII characters present.
-
-        memcpy(s, data, size);
-	 s[size] = '\0';
-        return;
-    }
-
-    char *ptr = s;
-    for (i = 0; i < size; ++i) {
-        if (data[i] == '\0') {
-            break;
-        } else if (data[i] < 0x80) {
-            *ptr++ = data[i];
-        } else if (data[i] < 0xc0) {
-            *ptr++ = 0xc2;
-            *ptr++ = data[i];
-        } else {
-            *ptr++ = 0xc3;
-            *ptr++ = data[i] - 64;
-        }
-    }
-    *ptr = '\0';
-
-}
-
 static void get_string(AVFormatContext *s, const char *key,
                        const uint8_t *buf, int buf_size)
 {
     int i, c;
-    char *q;
-#define BUF_SIZE 512
-    uint8_t str[BUF_SIZE] = {0};
+    char *q, str[512], *first_free_space = NULL;
 
-    //convert_iso8859_to_string(buf, buf_size, str);
-    memcpy(str, buf, (buf_size<BUF_SIZE)?buf_size:BUF_SIZE);
-#if 0
     q = str;
     for(i = 0; i < buf_size; i++) {
         c = buf[i];
@@ -234,14 +188,21 @@ static void get_string(AVFormatContext *s, const char *key,
             break;
         if ((q - str) >= sizeof(str) - 1)
             break;
+        if (c == ' ') {
+            if (!first_free_space)
+                first_free_space = q;
+        } else {
+            first_free_space = NULL;
+        }
         *q++ = c;
     }
     *q = '\0';
-#endif
 
-    if (str[0] != '\0') {
+    if (first_free_space)
+        *first_free_space = '\0';
+
+    if (*str)
         av_dict_set(&s->metadata, key, str, 0);
-    }
 }
 
 /**
@@ -251,7 +212,6 @@ static void get_string(AVFormatContext *s, const char *key,
  */
 static int parse_tag(AVFormatContext *s, const uint8_t *buf)
 {
-    char str[5];
     int genre;
 
     if (!(buf[0] == 'T' &&
@@ -264,8 +224,7 @@ static int parse_tag(AVFormatContext *s, const uint8_t *buf)
     get_string(s, "date",    buf + 93,  4);
     get_string(s, "comment", buf + 97, 30);
     if (buf[125] == 0 && buf[126] != 0) {
-        snprintf(str, sizeof(str), "%d", buf[126]);
-        av_dict_set(&s->metadata, "track", str, 0);
+        av_dict_set_int(&s->metadata, "track", buf[126], 0);
     }
     genre = buf[127];
     if (genre <= ID3v1_GENRE_MAX)
@@ -279,7 +238,7 @@ void ff_id3v1_read(AVFormatContext *s)
     uint8_t buf[ID3v1_TAG_SIZE];
     int64_t filesize, position = avio_tell(s->pb);
 
-    if (s->pb->seekable) {
+    if (s->pb->seekable & AVIO_SEEKABLE_NORMAL) {
         /* XXX: change that */
         filesize = avio_size(s->pb);
         if (filesize > 128) {

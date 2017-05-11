@@ -28,6 +28,8 @@
 #include "get_bits.h"
 #include "internal.h"
 
+#define PCX_HEADER_SIZE 128
+
 static void pcx_rle_decode(GetByteContext *gb,
                            uint8_t *dst,
                            unsigned int bytes_per_scanline,
@@ -74,8 +76,10 @@ static int pcx_decode_frame(AVCodecContext *avctx, void *data, int *got_frame,
                  bytes_per_scanline;
     uint8_t *ptr, *scanline;
 
-    if (avpkt->size < 128)
+    if (avpkt->size < PCX_HEADER_SIZE) {
+        av_log(avctx, AV_LOG_ERROR, "Packet too small\n");
         return AVERROR_INVALIDDATA;
+    }
 
     bytestream2_init(&gb, avpkt->data, avpkt->size);
 
@@ -132,10 +136,9 @@ static int pcx_decode_frame(AVCodecContext *avctx, void *data, int *got_frame,
 
     bytestream2_skipu(&gb, 60);
 
-    if ((ret = av_image_check_size(w, h, 0, avctx)) < 0)
+    if ((ret = ff_set_dimensions(avctx, w, h)) < 0)
         return ret;
-    if (w != avctx->width || h != avctx->height)
-        avcodec_set_dimensions(avctx, w, h);
+
     if ((ret = ff_get_buffer(avctx, p, 0)) < 0)
         return ret;
 
@@ -144,7 +147,7 @@ static int pcx_decode_frame(AVCodecContext *avctx, void *data, int *got_frame,
     ptr    = p->data[0];
     stride = p->linesize[0];
 
-    scanline = av_malloc(bytes_per_scanline + FF_INPUT_BUFFER_PADDING_SIZE);
+    scanline = av_malloc(bytes_per_scanline + AV_INPUT_BUFFER_PADDING_SIZE);
     if (!scanline)
         return AVERROR(ENOMEM);
 
@@ -240,5 +243,5 @@ AVCodec ff_pcx_decoder = {
     .type         = AVMEDIA_TYPE_VIDEO,
     .id           = AV_CODEC_ID_PCX,
     .decode       = pcx_decode_frame,
-    .capabilities = CODEC_CAP_DR1,
+    .capabilities = AV_CODEC_CAP_DR1,
 };

@@ -22,6 +22,7 @@
 #include "config.h"
 #include "attributes.h"
 #include "float_dsp.h"
+#include "mem.h"
 
 static void vector_fmul_c(float *dst, const float *src0, const float *src1,
                           int len)
@@ -115,8 +116,12 @@ float avpriv_scalarproduct_float_c(const float *v1, const float *v2, int len)
     return p;
 }
 
-av_cold void avpriv_float_dsp_init(AVFloatDSPContext *fdsp, int bit_exact)
+av_cold AVFloatDSPContext *avpriv_float_dsp_alloc(int bit_exact)
 {
+    AVFloatDSPContext *fdsp = av_mallocz(sizeof(AVFloatDSPContext));
+    if (!fdsp)
+        return NULL;
+
     fdsp->vector_fmul = vector_fmul_c;
     fdsp->vector_fmac_scalar = vector_fmac_scalar_c;
     fdsp->vector_fmul_scalar = vector_fmul_scalar_c;
@@ -127,13 +132,15 @@ av_cold void avpriv_float_dsp_init(AVFloatDSPContext *fdsp, int bit_exact)
     fdsp->butterflies_float = butterflies_float_c;
     fdsp->scalarproduct_float = avpriv_scalarproduct_float_c;
 
-#if ARCH_ARM
-    ff_float_dsp_init_arm(fdsp);
-#elif ARCH_PPC
-    ff_float_dsp_init_ppc(fdsp, bit_exact);
-#elif ARCH_X86
-    ff_float_dsp_init_x86(fdsp);
-#elif ARCH_MIPS
-    ff_float_dsp_init_mips(fdsp);
-#endif
+    if (ARCH_AARCH64)
+        ff_float_dsp_init_aarch64(fdsp);
+    if (ARCH_ARM)
+        ff_float_dsp_init_arm(fdsp);
+    if (ARCH_PPC)
+        ff_float_dsp_init_ppc(fdsp, bit_exact);
+    if (ARCH_X86)
+        ff_float_dsp_init_x86(fdsp);
+    if (ARCH_MIPS)
+        ff_float_dsp_init_mips(fdsp);
+    return fdsp;
 }

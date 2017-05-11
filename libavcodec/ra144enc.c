@@ -29,11 +29,11 @@
 
 #include "avcodec.h"
 #include "audio_frame_queue.h"
-#include "internal.h"
-#include "put_bits.h"
 #include "celp_filters.h"
+#include "internal.h"
+#include "mathops.h"
+#include "put_bits.h"
 #include "ra144.h"
-
 
 static av_cold int ra144_encode_close(AVCodecContext *avctx)
 {
@@ -55,12 +55,13 @@ static av_cold int ra144_encode_init(AVCodecContext * avctx)
         return -1;
     }
     avctx->frame_size = NBLOCKS * BLOCKSIZE;
-    avctx->delay      = avctx->frame_size;
+    avctx->initial_padding = avctx->frame_size;
     avctx->bit_rate = 8000;
     ractx = avctx->priv_data;
     ractx->lpc_coef[0] = ractx->lpc_tables[0];
     ractx->lpc_coef[1] = ractx->lpc_tables[1];
     ractx->avctx = avctx;
+    ff_audiodsp_init(&ractx->adsp);
     ret = ff_lpc_init(&ractx->lpc_ctx, avctx->frame_size, LPC_ORDER,
                       FF_LPC_TYPE_LEVINSON);
     if (ret < 0)
@@ -127,7 +128,7 @@ static void orthogonalize(float *v, const float *u)
 
 /**
  * Calculate match score and gain of an LPC-filtered vector with respect to
- * input data, possibly othogonalizing it to up to 2 other vectors
+ * input data, possibly orthogonalizing it to up to two other vectors.
  *
  * @param work array used to calculate the filtered vector
  * @param coefs coefficients of the LPC filter
@@ -228,8 +229,8 @@ static int adaptive_cb_search(const int16_t *adapt_cb, float *work,
 
 /**
  * Find the best vector of a fixed codebook by applying an LPC filter to
- * codebook entries, possibly othogonalizing them to up to 2 other vectors and
- * matching the results with input data
+ * codebook entries, possibly orthogonalizing them to up to two other vectors
+ * and matching the results with input data.
  *
  * @param work array used to calculate the filtered vectors
  * @param coefs coefficients of the LPC filter
@@ -334,7 +335,6 @@ static void ra144_encode_subblock(RA144Context *ractx,
     float data[BLOCKSIZE] = { 0 }, work[LPC_ORDER + BLOCKSIZE];
     float coefs[LPC_ORDER];
     float zero[BLOCKSIZE], cba[BLOCKSIZE], cb1[BLOCKSIZE], cb2[BLOCKSIZE];
-    int16_t cba_vect[BLOCKSIZE];
     int cba_idx, cb1_idx, cb2_idx, gain;
     int i, n;
     unsigned m[3];
@@ -373,8 +373,8 @@ static void ra144_encode_subblock(RA144Context *ractx,
          */
         memcpy(cba, work + LPC_ORDER, sizeof(cba));
 
-        ff_copy_and_dup(cba_vect, ractx->adapt_cb, cba_idx + BLOCKSIZE / 2 - 1);
-        m[0] = (ff_irms(cba_vect) * rms) >> 12;
+        ff_copy_and_dup(ractx->buffer_a, ractx->adapt_cb, cba_idx + BLOCKSIZE / 2 - 1);
+        m[0] = (ff_irms(&ractx->adsp, ractx->buffer_a) * rms) >> 12;
     }
     fixed_cb_search(work + LPC_ORDER, coefs, data, cba_idx, &cb1_idx, &cb2_idx);
     for (i = 0; i < BLOCKSIZE; i++) {
@@ -447,7 +447,7 @@ static int ra144_encode_frame(AVCodecContext *avctx, AVPacket *avpkt,
     if (ractx->last_frame)
         return 0;
 
-    if ((ret = ff_alloc_packet2(avctx, avpkt, FRAME_SIZE)) < 0)
+    if ((ret = ff_alloc_packet2(avctx, avpkt, FRAME_SIZE, 0)) < 0)
         return ret;
 
     /**
@@ -475,7 +475,7 @@ static int ra144_encode_frame(AVCodecContext *avctx, AVPacket *avpkt,
 
     ff_lpc_calc_coefs(&ractx->lpc_ctx, lpc_data, NBLOCKS * BLOCKSIZE, LPC_ORDER,
                       LPC_ORDER, 16, lpc_coefs, shift, FF_LPC_TYPE_LEVINSON,
-                      0, ORDER_METHOD_EST, 12, 0);
+                      0, ORDER_METHOD_EST, 0, 12, 0);
     for (i = 0; i < LPC_ORDER; i++)
         block_coefs[NBLOCKS - 1][i] = -(lpc_coefs[LPC_ORDER - 1][i] <<
                                         (12 - shift[LPC_ORDER - 1]));
@@ -551,7 +551,7 @@ AVCodec ff_ra_144_encoder = {
     .init           = ra144_encode_init,
     .encode2        = ra144_encode_frame,
     .close          = ra144_encode_close,
-    .capabilities   = CODEC_CAP_DELAY | CODEC_CAP_SMALL_LAST_FRAME,
+    .capabilities   = AV_CODEC_CAP_DELAY | AV_CODEC_CAP_SMALL_LAST_FRAME,
     .sample_fmts    = (const enum AVSampleFormat[]){ AV_SAMPLE_FMT_S16,
                                                      AV_SAMPLE_FMT_NONE },
     .supported_samplerates = (const int[]){ 8000, 0 },

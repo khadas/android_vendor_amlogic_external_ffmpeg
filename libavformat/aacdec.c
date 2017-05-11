@@ -26,8 +26,6 @@
 #include "rawdec.h"
 #include "id3v1.h"
 #include "apetag.h"
-#include "id3v2.h"
-#include "adif.h"
 
 static int adts_aac_probe(AVProbeData *p)
 {
@@ -40,83 +38,78 @@ static int adts_aac_probe(AVProbeData *p)
 
     buf = buf0;
 
-    if(!memcmp(buf, "ADIF", 4)){
-       return AVPROBE_SCORE_EXTENSION+1;
-    }
-
-    for(; buf < end; buf= buf2+1) {
+    for (; buf < end; buf = buf2 + 1) {
         buf2 = buf;
 
-        for(frames = 0; buf2 < end; frames++) {
+        for (frames = 0; buf2 < end; frames++) {
             uint32_t header = AV_RB16(buf2);
-            if((header&0xFFF6) != 0xFFF0)
+            if ((header & 0xFFF6) != 0xFFF0) {
+                if (buf != buf0) {
+                    // Found something that isn't an ADTS header, starting
+                    // from a position other than the start of the buffer.
+                    // Discard the count we've accumulated so far since it
+                    // probably was a false positive.
+                    frames = 0;
+                }
                 break;
+            }
             fsize = (AV_RB32(buf2 + 3) >> 13) & 0x1FFF;
-            if(fsize < 7)
+            if (fsize < 7)
                 break;
             fsize = FFMIN(fsize, end - buf2);
             buf2 += fsize;
         }
         max_frames = FFMAX(max_frames, frames);
-        if(buf == buf0)
-            first_frames= frames;
+        if (buf == buf0)
+            first_frames = frames;
     }
-    if   (first_frames>=3) return AVPROBE_SCORE_EXTENSION + 1;
-    else if(max_frames>500)return AVPROBE_SCORE_EXTENSION;
-    else if(max_frames>=3) return AVPROBE_SCORE_EXTENSION / 2;
-    else if(max_frames>=1) return 1;
-    else                   return 0;
+
+    if (first_frames >= 3)
+        return AVPROBE_SCORE_EXTENSION + 1;
+    else if (max_frames > 100)
+        return AVPROBE_SCORE_EXTENSION;
+    else if (max_frames >= 3)
+        return AVPROBE_SCORE_EXTENSION / 2;
+    else if (first_frames >= 1)
+        return 1;
+    else
+        return 0;
 }
 
 static int adts_aac_read_header(AVFormatContext *s)
 {
     AVStream *st;
-    int err;
-    uint8_t *buf=s->pb->buffer;
-    ID3v2ExtraMeta *id3v2_extra_meta = NULL;
-	
+
     st = avformat_new_stream(s, NULL);
     if (!st)
         return AVERROR(ENOMEM);
 
-    st->codec->codec_type = AVMEDIA_TYPE_AUDIO;
-    st->codec->codec_id = s->iformat->raw_codec_id;
-    st->need_parsing = AVSTREAM_PARSE_FULL_RAW;
+    st->codecpar->codec_type = AVMEDIA_TYPE_AUDIO;
+    st->codecpar->codec_id   = s->iformat->raw_codec_id;
+    st->need_parsing         = AVSTREAM_PARSE_FULL_RAW;
 
     ff_id3v1_read(s);
-    if (s->pb->seekable &&
+    if ((s->pb->seekable & AVIO_SEEKABLE_NORMAL) &&
         !av_dict_get(s->metadata, "", NULL, AV_DICT_IGNORE_SUFFIX)) {
         int64_t cur = avio_tell(s->pb);
         ff_ape_parse_tag(s);
         avio_seek(s->pb, cur, SEEK_SET);
     }
 
-    //LCM of all possible ADTS sample rates
+    // LCM of all possible ADTS sample rates
     avpriv_set_pts_info(st, 64, 1, 28224000);
-    ff_id3v2_read(s, "ID3", &id3v2_extra_meta);
-
-    if (buf[0]=='A' && buf[1]=='D' && buf[2]=='I' && buf[3]=='F')
-    {
-        err = adif_header_parse(st,s->pb);
-        if(err){
-            av_log(NULL, AV_LOG_INFO," adif parser header  failed\n");
-            return err;
-        } else{
-            st->need_parsing = AVSTREAM_PARSE_NONE;
-            st->codec->codec_id = AV_CODEC_ID_AAC;
-        }
-    }	
 
     return 0;
 }
 
 AVInputFormat ff_aac_demuxer = {
-    .name           = "aac",
-    .long_name      = NULL_IF_CONFIG_SMALL("raw ADTS AAC (Advanced Audio Coding)"),
-    .read_probe     = adts_aac_probe,
-    .read_header    = adts_aac_read_header,
-    .read_packet    = ff_raw_read_partial_packet,
-    .flags          = AVFMT_GENERIC_INDEX,
-    .extensions     = "aac",
-    .raw_codec_id   = AV_CODEC_ID_AAC,
+    .name         = "aac",
+    .long_name    = NULL_IF_CONFIG_SMALL("raw ADTS AAC (Advanced Audio Coding)"),
+    .read_probe   = adts_aac_probe,
+    .read_header  = adts_aac_read_header,
+    .read_packet  = ff_raw_read_partial_packet,
+    .flags        = AVFMT_GENERIC_INDEX,
+    .extensions   = "aac",
+    .mime_type    = "audio/aac,audio/aacp,audio/x-aac",
+    .raw_codec_id = AV_CODEC_ID_AAC,
 };

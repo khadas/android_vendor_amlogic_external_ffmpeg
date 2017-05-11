@@ -27,7 +27,7 @@
 #include "mpegaudiodsp.h"
 #include "mpegaudio.h"
 
-#if CONFIG_FLOAT
+#if USE_FLOATS
 #define RENAME(n) n##_float
 
 static inline float round_sample(float *sum)
@@ -63,8 +63,8 @@ static inline int round_sample(int64_t *sum)
 #   define MACS(rt, ra, rb) MAC64(rt, ra, rb)
 #   define MLSS(rt, ra, rb) MLS64(rt, ra, rb)
 #   define MULH3(x, y, s) MULH((s)*(x), y)
-#   define MULLx(x, y, s) MULL(x,y,s)
-#   define SHR(a,b)       ((a)>>(b))
+#   define MULLx(x, y, s) MULL((int)(x),(y),s)
+#   define SHR(a,b)       (((int)(a))>>(b))
 #   define FIXR(a)        ((int)((a) * FRAC_ONE + 0.5))
 #   define FIXHR(a)       ((int)((a) * (1LL<<32) + 0.5))
 #endif
@@ -120,12 +120,12 @@ DECLARE_ALIGNED(16, MPA_INT, RENAME(ff_mpa_synth_window))[512+256];
 
 void RENAME(ff_mpadsp_apply_window)(MPA_INT *synth_buf, MPA_INT *window,
                                   int *dither_state, OUT_INT *samples,
-                                  int incr)
+                                  ptrdiff_t incr)
 {
     register const MPA_INT *w, *w2, *p;
     int j;
     OUT_INT *samples2;
-#if CONFIG_FLOAT
+#if USE_FLOATS
     float sum, sum2;
 #else
     int64_t sum, sum2;
@@ -176,7 +176,7 @@ void RENAME(ff_mpadsp_apply_window)(MPA_INT *synth_buf, MPA_INT *window,
 void RENAME(ff_mpa_synth_filter)(MPADSPContext *s, MPA_INT *synth_buf_ptr,
                                  int *synth_buf_offset,
                                  MPA_INT *window, int *dither_state,
-                                 OUT_INT *samples, int incr,
+                                 OUT_INT *samples, ptrdiff_t incr,
                                  MPA_INT *sb_samples)
 {
     MPA_INT *synth_buf;
@@ -200,7 +200,7 @@ av_cold void RENAME(ff_mpa_synth_init)(MPA_INT *window)
     for(i=0;i<257;i++) {
         INTFLOAT v;
         v = ff_mpa_enwindow[i];
-#if CONFIG_FLOAT
+#if USE_FLOATS
         v *= 1.0 / (1LL<<(16 + FRAC_BITS));
 #endif
         window[i] = v;
@@ -300,11 +300,11 @@ static const INTFLOAT icos36h[9] = {
 };
 
 /* using Lee like decomposition followed by hand coded 9 points DCT */
-static void imdct36(INTFLOAT *out, INTFLOAT *buf, INTFLOAT *in, INTFLOAT *win)
+static void imdct36(INTFLOAT *out, INTFLOAT *buf, SUINTFLOAT *in, INTFLOAT *win)
 {
     int i, j;
-    INTFLOAT t0, t1, t2, t3, s0, s1, s2, s3;
-    INTFLOAT tmp[18], *tmp1, *in1;
+    SUINTFLOAT t0, t1, t2, t3, s0, s1, s2, s3;
+    SUINTFLOAT tmp[18], *tmp1, *in1;
 
     for (i = 17; i >= 1; i--)
         in[i] += in[i-1];

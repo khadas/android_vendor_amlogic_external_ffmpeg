@@ -19,11 +19,10 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#include "avcodec.h"
-#include "internal.h"
-
 #define BITSTREAM_READER_LE
+#include "avcodec.h"
 #include "get_bits.h"
+#include "internal.h"
 
 typedef union MacroBlock {
     uint16_t pixels[4];
@@ -42,7 +41,7 @@ typedef struct CodeBook {
 } CodeBook;
 
 typedef struct Escape124Context {
-    AVFrame frame;
+    AVFrame *frame;
 
     unsigned num_superblocks;
 
@@ -58,11 +57,14 @@ static av_cold int escape124_decode_init(AVCodecContext *avctx)
 {
     Escape124Context *s = avctx->priv_data;
 
-    avcodec_get_frame_defaults(&s->frame);
     avctx->pix_fmt = AV_PIX_FMT_RGB555;
 
     s->num_superblocks = ((unsigned)avctx->width / 8) *
                          ((unsigned)avctx->height / 8);
+
+    s->frame = av_frame_alloc();
+    if (!s->frame)
+        return AVERROR(ENOMEM);
 
     return 0;
 }
@@ -73,9 +75,9 @@ static av_cold int escape124_decode_close(AVCodecContext *avctx)
     Escape124Context *s = avctx->priv_data;
 
     for (i = 0; i < 3; i++)
-        av_free(s->codebooks[i].blocks);
+        av_freep(&s->codebooks[i].blocks);
 
-    av_frame_unref(&s->frame);
+    av_frame_free(&s->frame);
 
     return 0;
 }
@@ -140,10 +142,11 @@ static MacroBlock decode_macroblock(Escape124Context* s, GetBitContext* gb,
     // This function reads a maximum of 22 bits; the callers
     // guard this function appropriately
     unsigned block_index, depth;
-
-    if (get_bits1(gb)) {
-        static const char transitions[3][2] = { {2, 1}, {0, 2}, {1, 0} };
-        *codebook_index = transitions[*codebook_index][get_bits1(gb)];
+    int value = get_bits1(gb);
+    if (value) {
+        static const int8_t transitions[3][2] = { {2, 1}, {0, 2}, {1, 0} };
+        value = get_bits1(gb);
+        *codebook_index = transitions[*codebook_index][value];
     }
 
     depth = s->codebooks[*codebook_index].depth;
@@ -151,7 +154,7 @@ static MacroBlock decode_macroblock(Escape124Context* s, GetBitContext* gb,
     // depth = 0 means that this shouldn't read any bits;
     // in theory, this is the same as get_bits(gb, 0), but
     // that doesn't actually work.
-    block_index = depth ? get_bits(gb, depth) : 0;
+    block_index = get_bitsz(gb, depth);
 
     if (*codebook_index == 1) {
         block_index += superblock_index << s->codebooks[1].depth;
@@ -227,13 +230,13 @@ static int escape124_decode_frame(AVCodecContext *avctx,
     // Leave last frame unchanged
     // FIXME: Is this necessary?  I haven't seen it in any real samples
     if (!(frame_flags & 0x114) || !(frame_flags & 0x7800000)) {
-        if (!s->frame.data[0])
+        if (!s->frame->data[0])
             return AVERROR_INVALIDDATA;
 
         av_log(avctx, AV_LOG_DEBUG, "Skipping frame\n");
 
         *got_frame = 1;
-        if ((ret = av_frame_ref(frame, &s->frame)) < 0)
+        if ((ret = av_frame_ref(frame, s->frame)) < 0)
             return ret;
 
         return frame_size;
@@ -246,6 +249,10 @@ static int escape124_decode_frame(AVCodecContext *avctx,
                 // This codebook can be cut off at places other than
                 // powers of 2, leaving some of the entries undefined.
                 cb_size = get_bits_long(&gb, 20);
+                if (!cb_size) {
+                    av_log(avctx, AV_LOG_ERROR, "Invalid codebook size 0.\n");
+                    return AVERROR_INVALIDDATA;
+                }
                 cb_depth = av_log2(cb_size - 1) + 1;
             } else {
                 cb_depth = get_bits(&gb, 4);
@@ -260,7 +267,7 @@ static int escape124_decode_frame(AVCodecContext *avctx,
                     cb_size = s->num_superblocks << cb_depth;
                 }
             }
-            av_free(s->codebooks[i].blocks);
+            av_freep(&s->codebooks[i].blocks);
             s->codebooks[i] = unpack_codebook(&gb, cb_depth, cb_size);
             if (!s->codebooks[i].blocks)
                 return -1;
@@ -272,8 +279,8 @@ static int escape124_decode_frame(AVCodecContext *avctx,
 
     new_frame_data = (uint16_t*)frame->data[0];
     new_stride = frame->linesize[0] / 2;
-    old_frame_data = (uint16_t*)s->frame.data[0];
-    old_stride = s->frame.linesize[0] / 2;
+    old_frame_data = (uint16_t*)s->frame->data[0];
+    old_stride = s->frame->linesize[0] / 2;
 
     for (superblock_index = 0; superblock_index < s->num_superblocks;
          superblock_index++) {
@@ -350,8 +357,8 @@ static int escape124_decode_frame(AVCodecContext *avctx,
            "Escape sizes: %i, %i, %i\n",
            frame_size, buf_size, get_bits_count(&gb) / 8);
 
-    av_frame_unref(&s->frame);
-    if ((ret = av_frame_ref(&s->frame, frame)) < 0)
+    av_frame_unref(s->frame);
+    if ((ret = av_frame_ref(s->frame, frame)) < 0)
         return ret;
 
     *got_frame = 1;
@@ -369,5 +376,5 @@ AVCodec ff_escape124_decoder = {
     .init           = escape124_decode_init,
     .close          = escape124_decode_close,
     .decode         = escape124_decode_frame,
-    .capabilities   = CODEC_CAP_DR1,
+    .capabilities   = AV_CODEC_CAP_DR1,
 };

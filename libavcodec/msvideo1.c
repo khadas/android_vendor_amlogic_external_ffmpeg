@@ -1,6 +1,6 @@
 /*
  * Microsoft Video-1 Decoder
- * Copyright (C) 2003 the ffmpeg project
+ * Copyright (C) 2003 The FFmpeg project
  *
  * This file is part of FFmpeg.
  *
@@ -24,7 +24,6 @@
  * Microsoft Video-1 Decoder by Mike Melanson (melanson@pcisys.net)
  * For more information about the MS Video-1 format, visit:
  *   http://www.pcisys.net/~melanson/codecs/
- *
  */
 
 #include <stdio.h>
@@ -47,7 +46,7 @@
 typedef struct Msvideo1Context {
 
     AVCodecContext *avctx;
-    AVFrame frame;
+    AVFrame *frame;
 
     const unsigned char *buf;
     int size;
@@ -67,12 +66,16 @@ static av_cold int msvideo1_decode_init(AVCodecContext *avctx)
     if (s->avctx->bits_per_coded_sample == 8) {
         s->mode_8bit = 1;
         avctx->pix_fmt = AV_PIX_FMT_PAL8;
+        if (avctx->extradata_size >= AVPALETTE_SIZE)
+            memcpy(s->pal, avctx->extradata, AVPALETTE_SIZE);
     } else {
         s->mode_8bit = 0;
         avctx->pix_fmt = AV_PIX_FMT_RGB555;
     }
 
-    avcodec_get_frame_defaults(&s->frame);
+    s->frame = av_frame_alloc();
+    if (!s->frame)
+        return AVERROR(ENOMEM);
 
     return 0;
 }
@@ -93,8 +96,8 @@ static void msvideo1_decode_8bit(Msvideo1Context *s)
     unsigned short flags;
     int skip_blocks;
     unsigned char colors[8];
-    unsigned char *pixels = s->frame.data[0];
-    int stride = s->frame.linesize[0];
+    unsigned char *pixels = s->frame->data[0];
+    int stride = s->frame->linesize[0];
 
     stream_ptr = 0;
     skip_blocks = 0;
@@ -174,7 +177,7 @@ static void msvideo1_decode_8bit(Msvideo1Context *s)
 
     /* make the palette available on the way out */
     if (s->avctx->pix_fmt == AV_PIX_FMT_PAL8)
-        memcpy(s->frame.data[1], s->pal, AVPALETTE_SIZE);
+        memcpy(s->frame->data[1], s->pal, AVPALETTE_SIZE);
 }
 
 static void msvideo1_decode_16bit(Msvideo1Context *s)
@@ -193,8 +196,8 @@ static void msvideo1_decode_16bit(Msvideo1Context *s)
     unsigned short flags;
     int skip_blocks;
     unsigned short colors[8];
-    unsigned short *pixels = (unsigned short *)s->frame.data[0];
-    int stride = s->frame.linesize[0] / 2;
+    unsigned short *pixels = (unsigned short *)s->frame->data[0];
+    int stride = s->frame->linesize[0] / 2;
 
     stream_ptr = 0;
     skip_blocks = 0;
@@ -298,15 +301,18 @@ static int msvideo1_decode_frame(AVCodecContext *avctx,
     s->buf = buf;
     s->size = buf_size;
 
-    if ((ret = ff_reget_buffer(avctx, &s->frame)) < 0)
+    if ((ret = ff_reget_buffer(avctx, s->frame)) < 0)
         return ret;
 
     if (s->mode_8bit) {
-        const uint8_t *pal = av_packet_get_side_data(avpkt, AV_PKT_DATA_PALETTE, NULL);
+        int size;
+        const uint8_t *pal = av_packet_get_side_data(avpkt, AV_PKT_DATA_PALETTE, &size);
 
-        if (pal) {
+        if (pal && size == AVPALETTE_SIZE) {
             memcpy(s->pal, pal, AVPALETTE_SIZE);
-            s->frame.palette_has_changed = 1;
+            s->frame->palette_has_changed = 1;
+        } else if (pal) {
+            av_log(avctx, AV_LOG_ERROR, "Palette size %d is wrong\n", size);
         }
     }
 
@@ -315,7 +321,7 @@ static int msvideo1_decode_frame(AVCodecContext *avctx,
     else
         msvideo1_decode_16bit(s);
 
-    if ((ret = av_frame_ref(data, &s->frame)) < 0)
+    if ((ret = av_frame_ref(data, s->frame)) < 0)
         return ret;
 
     *got_frame      = 1;
@@ -328,7 +334,7 @@ static av_cold int msvideo1_decode_end(AVCodecContext *avctx)
 {
     Msvideo1Context *s = avctx->priv_data;
 
-    av_frame_unref(&s->frame);
+    av_frame_free(&s->frame);
 
     return 0;
 }
@@ -342,5 +348,5 @@ AVCodec ff_msvideo1_decoder = {
     .init           = msvideo1_decode_init,
     .close          = msvideo1_decode_end,
     .decode         = msvideo1_decode_frame,
-    .capabilities   = CODEC_CAP_DR1,
+    .capabilities   = AV_CODEC_CAP_DR1,
 };

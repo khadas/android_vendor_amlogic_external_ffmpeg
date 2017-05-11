@@ -84,10 +84,10 @@ void ff_mss34_gen_quant_mat(uint16_t *qmat, int quality, int luma)
     blk[6 * step] = (-(t3 + t7) + t8 + tA) >> shift;                \
     blk[7 * step] = (-(t1 + t6) + t9 + tB) >> shift;                \
 
-#define SOP_ROW(a) ((a) << 16) + 0x2000
-#define SOP_COL(a) ((a + 32) << 16)
+#define SOP_ROW(a) (((a) << 16) + 0x2000)
+#define SOP_COL(a) (((a) + 32) << 16)
 
-void ff_mss34_dct_put(uint8_t *dst, int stride, int *block)
+void ff_mss34_dct_put(uint8_t *dst, ptrdiff_t stride, int *block)
 {
     int i, j;
     int *ptr;

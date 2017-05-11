@@ -50,7 +50,7 @@ static const uint8_t ansi_to_cga[16] = {
     0,  4,  2,  6,  1,  5,  3, 7, 8, 12, 10, 14,  9, 13, 11, 15
 };
 
-typedef struct {
+typedef struct AnsiContext {
     AVFrame *frame;
     int x;                /**< x cursor position (pixels) */
     int y;                /**< y cursor position (pixels) */
@@ -90,9 +90,14 @@ static av_cold int decode_init(AVCodecContext *avctx)
     s->fg          = DEFAULT_FG_COLOR;
     s->bg          = DEFAULT_BG_COLOR;
 
-    if (!avctx->width || !avctx->height)
-        avcodec_set_dimensions(avctx, 80<<3, 25<<4);
-
+    if (!avctx->width || !avctx->height) {
+        int ret = ff_set_dimensions(avctx, 80 << 3, 25 << 4);
+        if (ret < 0)
+            return ret;
+    } else if (avctx->width % FONT_WIDTH || avctx->height % s->font_height) {
+        av_log(avctx, AV_LOG_ERROR, "Invalid dimensions %d %d\n", avctx->width, avctx->height);
+        return AVERROR(EINVAL);
+    }
     return 0;
 }
 
@@ -182,7 +187,10 @@ static void draw_char(AVCodecContext *avctx, int c)
 static int execute_code(AVCodecContext * avctx, int c)
 {
     AnsiContext *s = avctx->priv_data;
-    int ret, i, width, height;
+    int ret, i;
+    int width  = avctx->width;
+    int height = avctx->height;
+
     switch(c) {
     case 'A': //Cursor Up
         s->y = FFMAX(s->y - (s->nb_args > 0 ? s->args[0]*s->font_height : s->font_height), 0);
@@ -201,12 +209,10 @@ static int execute_code(AVCodecContext * avctx, int c)
         s->y = s->nb_args > 0 ? av_clip((s->args[0] - 1)*s->font_height, 0, avctx->height - s->font_height) : 0;
         s->x = s->nb_args > 1 ? av_clip((s->args[1] - 1)*FONT_WIDTH,     0, avctx->width  - FONT_WIDTH) : 0;
         break;
-    case 'h': //set creen mode
+    case 'h': //set screen mode
     case 'l': //reset screen mode
         if (s->nb_args < 2)
             s->args[0] = DEFAULT_SCREEN_MODE;
-        width = avctx->width;
-        height = avctx->height;
         switch(s->args[0]) {
         case 0: case 1: case 4: case 5: case 13: case 19: //320x200 (25 rows)
             s->font = avpriv_cga_font;
@@ -247,7 +253,9 @@ static int execute_code(AVCodecContext * avctx, int c)
         s->y = av_clip(s->y, 0, height - s->font_height);
         if (width != avctx->width || height != avctx->height) {
             av_frame_unref(s->frame);
-            avcodec_set_dimensions(avctx, width, height);
+            ret = ff_set_dimensions(avctx, width, height);
+            if (ret < 0)
+                return ret;
             if ((ret = ff_get_buffer(avctx, s->frame,
                                      AV_GET_BUFFER_FLAG_REF)) < 0)
                 return ret;
@@ -417,7 +425,7 @@ static int decode_frame(AVCodecContext *avctx,
             switch(buf[0]) {
             case '0': case '1': case '2': case '3': case '4':
             case '5': case '6': case '7': case '8': case '9':
-                if (s->nb_args < MAX_NB_ARGS)
+                if (s->nb_args < MAX_NB_ARGS && s->args[s->nb_args] < 6553)
                     s->args[s->nb_args] = FFMAX(s->args[s->nb_args], 0) * 10 + buf[0] - '0';
                 break;
             case ';':
@@ -473,5 +481,6 @@ AVCodec ff_ansi_decoder = {
     .init           = decode_init,
     .close          = decode_close,
     .decode         = decode_frame,
-    .capabilities   = CODEC_CAP_DR1,
+    .capabilities   = AV_CODEC_CAP_DR1,
+    .caps_internal  = FF_CODEC_CAP_INIT_THREADSAFE,
 };

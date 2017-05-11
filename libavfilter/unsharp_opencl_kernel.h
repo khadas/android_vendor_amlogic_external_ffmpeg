@@ -1,5 +1,6 @@
 /*
  * Copyright (C) 2013 Wei Gao <weigao@multicorewareinc.com>
+ * Copyright (C) 2013 Lenny Wang
  *
  * This file is part of FFmpeg.
  *
@@ -32,7 +33,212 @@ inline unsigned char clip_uint8(int a)
         return a;
 }
 
-kernel void unsharp(global  unsigned char *src,
+kernel void unsharp_luma(
+                    global unsigned char *src,
+                    global unsigned char *dst,
+                    global int *mask_x,
+                    global int *mask_y,
+                    int amount,
+                    int scalebits,
+                    int halfscale,
+                    int src_stride,
+                    int dst_stride,
+                    int width,
+                    int height)
+{
+    int2 threadIdx, blockIdx, globalIdx;
+    threadIdx.x = get_local_id(0);
+    threadIdx.y = get_local_id(1);
+    blockIdx.x = get_group_id(0);
+    blockIdx.y = get_group_id(1);
+    globalIdx.x = get_global_id(0);
+    globalIdx.y = get_global_id(1);
+
+    if (!amount) {
+        if (globalIdx.x < width && globalIdx.y < height)
+            dst[globalIdx.x + globalIdx.y*dst_stride] = src[globalIdx.x + globalIdx.y*src_stride];
+        return;
+    }
+
+    local unsigned int l[32][32];
+    local unsigned int lcx[LU_RADIUS_X];
+    local unsigned int lcy[LU_RADIUS_Y];
+    int indexIx, indexIy, i, j;
+
+    //load up tile: actual workspace + halo of 8 points in x and y \n
+    for(i = 0; i <= 1; i++) {
+        indexIy = -8 + (blockIdx.y + i) * 16 + threadIdx.y;
+        indexIy = indexIy < 0 ? 0 : indexIy;
+        indexIy = indexIy >= height ? height - 1: indexIy;
+        for(j = 0; j <= 1; j++) {
+            indexIx = -8 + (blockIdx.x + j) * 16 + threadIdx.x;
+            indexIx = indexIx < 0 ? 0 : indexIx;
+            indexIx = indexIx >= width ? width - 1: indexIx;
+            l[i*16 + threadIdx.y][j*16 + threadIdx.x] = src[indexIy*src_stride + indexIx];
+        }
+    }
+
+    int indexL = threadIdx.y*16 + threadIdx.x;
+    if (indexL < LU_RADIUS_X)
+        lcx[indexL] = mask_x[indexL];
+    if (indexL < LU_RADIUS_Y)
+        lcy[indexL] = mask_y[indexL];
+    barrier(CLK_LOCAL_MEM_FENCE);
+
+    //needed for unsharp mask application in the end \n
+    int orig_value = (int)l[threadIdx.y + 8][threadIdx.x + 8];
+
+    int idx, idy, maskIndex;
+    int temp[2] = {0};
+    int steps_x = (LU_RADIUS_X-1)/2;
+    int steps_y = (LU_RADIUS_Y-1)/2;
+
+    // compute the actual workspace + left&right halos \n
+      \n#pragma unroll\n
+    for (j = 0; j <=1; j++) {
+      //extra work to cover left and right halos \n
+      idx = 16*j + threadIdx.x;
+      \n#pragma unroll\n
+        for (i = -steps_y; i <= steps_y; i++) {
+          idy = 8 + i + threadIdx.y;
+          maskIndex = (i + steps_y);
+          temp[j] += (int)l[idy][idx] * lcy[maskIndex];
+        }
+    }
+    barrier(CLK_LOCAL_MEM_FENCE);
+    //save results from the vertical filter in local memory \n
+    idy = 8 + threadIdx.y;
+      \n#pragma unroll\n
+    for (j = 0; j <=1; j++) {
+      idx = 16*j + threadIdx.x;
+      l[idy][idx] = temp[j];
+    }
+    barrier(CLK_LOCAL_MEM_FENCE);
+
+    //compute results with the horizontal filter \n
+    int sum = 0;
+    idy = 8 + threadIdx.y;
+    \n#pragma unroll\n
+      for (j = -steps_x; j <= steps_x; j++) {
+        idx = 8 + j + threadIdx.x;
+        maskIndex = j + steps_x;
+        sum += (int)l[idy][idx] * lcx[maskIndex];
+      }
+
+    int res = orig_value + (((orig_value - (int)((sum + halfscale) >> scalebits)) * amount) >> 16);
+
+    if (globalIdx.x < width && globalIdx.y < height)
+        dst[globalIdx.x + globalIdx.y*dst_stride] = clip_uint8(res);
+}
+
+kernel void unsharp_chroma(
+                    global unsigned char *src_y,
+                    global unsigned char *dst_y,
+                    global int *mask_x,
+                    global int *mask_y,
+                    int amount,
+                    int scalebits,
+                    int halfscale,
+                    int src_stride_lu,
+                    int src_stride_ch,
+                    int dst_stride_lu,
+                    int dst_stride_ch,
+                    int width,
+                    int height,
+                    int cw,
+                    int ch)
+{
+    global unsigned char *dst_u = dst_y + height * dst_stride_lu;
+    global unsigned char *dst_v = dst_u + ch * dst_stride_ch;
+    global unsigned char *src_u = src_y + height * src_stride_lu;
+    global unsigned char *src_v = src_u + ch * src_stride_ch;
+    int2 threadIdx, blockIdx, globalIdx;
+    threadIdx.x = get_local_id(0);
+    threadIdx.y = get_local_id(1);
+    blockIdx.x = get_group_id(0);
+    blockIdx.y = get_group_id(1);
+    globalIdx.x = get_global_id(0);
+    globalIdx.y = get_global_id(1);
+    int padch = get_global_size(1)/2;
+    global unsigned char *src = globalIdx.y>=padch ? src_v : src_u;
+    global unsigned char *dst = globalIdx.y>=padch ? dst_v : dst_u;
+
+    blockIdx.y = globalIdx.y>=padch ? blockIdx.y - get_num_groups(1)/2 : blockIdx.y;
+    globalIdx.y = globalIdx.y>=padch ? globalIdx.y - padch : globalIdx.y;
+
+    if (!amount) {
+        if (globalIdx.x < cw && globalIdx.y < ch)
+            dst[globalIdx.x + globalIdx.y*dst_stride_ch] = src[globalIdx.x + globalIdx.y*src_stride_ch];
+        return;
+    }
+
+    local unsigned int l[32][32];
+    local unsigned int lcx[CH_RADIUS_X];
+    local unsigned int lcy[CH_RADIUS_Y];
+    int indexIx, indexIy, i, j;
+    for(i = 0; i <= 1; i++) {
+        indexIy = -8 + (blockIdx.y + i) * 16 + threadIdx.y;
+        indexIy = indexIy < 0 ? 0 : indexIy;
+        indexIy = indexIy >= ch ? ch - 1: indexIy;
+        for(j = 0; j <= 1; j++) {
+            indexIx = -8 + (blockIdx.x + j) * 16 + threadIdx.x;
+            indexIx = indexIx < 0 ? 0 : indexIx;
+            indexIx = indexIx >= cw ? cw - 1: indexIx;
+            l[i*16 + threadIdx.y][j*16 + threadIdx.x] = src[indexIy * src_stride_ch + indexIx];
+        }
+    }
+
+    int indexL = threadIdx.y*16 + threadIdx.x;
+    if (indexL < CH_RADIUS_X)
+        lcx[indexL] = mask_x[indexL];
+    if (indexL < CH_RADIUS_Y)
+        lcy[indexL] = mask_y[indexL];
+    barrier(CLK_LOCAL_MEM_FENCE);
+
+    int orig_value = (int)l[threadIdx.y + 8][threadIdx.x + 8];
+
+    int idx, idy, maskIndex;
+    int steps_x = CH_RADIUS_X/2;
+    int steps_y = CH_RADIUS_Y/2;
+    int temp[2] = {0,0};
+
+    \n#pragma unroll\n
+      for (j = 0; j <= 1; j++) {
+        idx = 16*j + threadIdx.x;
+        \n#pragma unroll\n
+          for (i = -steps_y; i <= steps_y; i++) {
+            idy = 8 + i + threadIdx.y;
+            maskIndex = i + steps_y;
+            temp[j] += (int)l[idy][idx] * lcy[maskIndex];
+          }
+      }
+
+    barrier(CLK_LOCAL_MEM_FENCE);
+    idy = 8 + threadIdx.y;
+    \n#pragma unroll\n
+    for (j = 0; j <= 1; j++) {
+      idx = 16*j + threadIdx.x;
+      l[idy][idx] = temp[j];
+    }
+    barrier(CLK_LOCAL_MEM_FENCE);
+
+    //compute results with the horizontal filter \n
+    int sum = 0;
+    idy = 8 + threadIdx.y;
+    \n#pragma unroll\n
+      for (j = -steps_x; j <= steps_x; j++) {
+        idx = 8 + j + threadIdx.x;
+        maskIndex = j + steps_x;
+        sum += (int)l[idy][idx] * lcx[maskIndex];
+      }
+
+    int res = orig_value + (((orig_value - (int)((sum + halfscale) >> scalebits)) * amount) >> 16);
+
+    if (globalIdx.x < cw && globalIdx.y < ch)
+        dst[globalIdx.x + globalIdx.y*dst_stride_ch] = clip_uint8(res);
+}
+
+kernel void unsharp_default(global  unsigned char *src,
                     global  unsigned char *dst,
                     const global  unsigned int *mask_lu,
                     const global  unsigned int *mask_ch,
@@ -131,7 +337,6 @@ kernel void unsharp(global  unsigned char *src,
         temp_dst[x + y * temp_dst_stride] = temp_src[x + y * temp_src_stride];
     }
 }
-
 );
 
 #endif /* AVFILTER_UNSHARP_OPENCL_KERNEL_H */

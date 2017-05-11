@@ -19,6 +19,8 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
+#include <inttypes.h>
+
 #include "libavutil/intreadwrite.h"
 #include "avformat.h"
 #include "internal.h"
@@ -27,6 +29,9 @@ static int dfa_probe(AVProbeData *p)
 {
     if (p->buf_size < 4 || AV_RL32(p->buf) != MKTAG('D', 'F', 'I', 'A'))
         return 0;
+
+    if (AV_RL32(p->buf + 16) != 0x80)
+        return AVPROBE_SCORE_MAX / 4;
 
     return AVPROBE_SCORE_MAX;
 }
@@ -51,10 +56,10 @@ static int dfa_read_header(AVFormatContext *s)
     if (!st)
         return AVERROR(ENOMEM);
 
-    st->codec->codec_type = AVMEDIA_TYPE_VIDEO;
-    st->codec->codec_id   = AV_CODEC_ID_DFA;
-    st->codec->width      = avio_rl16(pb);
-    st->codec->height     = avio_rl16(pb);
+    st->codecpar->codec_type = AVMEDIA_TYPE_VIDEO;
+    st->codecpar->codec_id   = AV_CODEC_ID_DFA;
+    st->codecpar->width      = avio_rl16(pb);
+    st->codecpar->height     = avio_rl16(pb);
     mspf = avio_rl32(pb);
     if (!mspf) {
         av_log(s, AV_LOG_WARNING, "Zero FPS reported, defaulting to 10\n");
@@ -64,9 +69,9 @@ static int dfa_read_header(AVFormatContext *s)
     avio_skip(pb, 128 - 16); // padding
     st->duration = frames;
 
-    if (ff_alloc_extradata(st->codec, 2))
+    if (ff_alloc_extradata(st->codecpar, 2))
         return AVERROR(ENOMEM);
-    AV_WL16(st->codec->extradata, version);
+    AV_WL16(st->codecpar->extradata, version);
     if (version == 0x100)
         st->sample_aspect_ratio = (AVRational){2, 1};
 
@@ -79,28 +84,30 @@ static int dfa_read_packet(AVFormatContext *s, AVPacket *pkt)
     uint32_t frame_size;
     int ret, first = 1;
 
-    if (pb->eof_reached)
+    if (avio_feof(pb))
         return AVERROR_EOF;
 
     if (av_get_packet(pb, pkt, 12) != 12)
         return AVERROR(EIO);
-    while (!pb->eof_reached) {
+    while (!avio_feof(pb)) {
         if (!first) {
             ret = av_append_packet(pb, pkt, 12);
             if (ret < 0) {
-                av_free_packet(pkt);
+                av_packet_unref(pkt);
                 return ret;
             }
         } else
             first = 0;
         frame_size = AV_RL32(pkt->data + pkt->size - 8);
         if (frame_size > INT_MAX - 4) {
-            av_log(s, AV_LOG_ERROR, "Too large chunk size: %d\n", frame_size);
+            av_log(s, AV_LOG_ERROR, "Too large chunk size: %"PRIu32"\n", frame_size);
+            av_packet_unref(pkt);
             return AVERROR(EIO);
         }
         if (AV_RL32(pkt->data + pkt->size - 12) == MKTAG('E', 'O', 'F', 'R')) {
             if (frame_size) {
-                av_log(s, AV_LOG_WARNING, "skipping %d bytes of end-of-frame marker chunk\n",
+                av_log(s, AV_LOG_WARNING,
+                       "skipping %"PRIu32" bytes of end-of-frame marker chunk\n",
                        frame_size);
                 avio_skip(pb, frame_size);
             }
@@ -108,7 +115,7 @@ static int dfa_read_packet(AVFormatContext *s, AVPacket *pkt)
         }
         ret = av_append_packet(pb, pkt, frame_size);
         if (ret < 0) {
-            av_free_packet(pkt);
+            av_packet_unref(pkt);
             return ret;
         }
     }

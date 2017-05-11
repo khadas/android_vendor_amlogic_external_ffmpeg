@@ -24,6 +24,8 @@
  * This is a demuxer for Loki SDL Motion JPEG files
  */
 
+#include <inttypes.h>
+
 #include "avformat.h"
 #include "internal.h"
 #include "riff.h"
@@ -52,11 +54,11 @@ static int smjpeg_read_header(AVFormatContext *s)
     avio_skip(pb, 8); // magic
     version = avio_rb32(pb);
     if (version)
-        avpriv_request_sample(s, "Unknown version %d", version);
+        avpriv_request_sample(s, "Unknown version %"PRIu32, version);
 
     duration = avio_rb32(pb); // in msec
 
-    while (!url_feof(pb)) {
+    while (!avio_feof(pb)) {
         htype = avio_rl32(pb);
         switch (htype) {
         case SMJPEG_TXT:
@@ -86,13 +88,13 @@ static int smjpeg_read_header(AVFormatContext *s)
             ast = avformat_new_stream(s, 0);
             if (!ast)
                 return AVERROR(ENOMEM);
-            ast->codec->codec_type  = AVMEDIA_TYPE_AUDIO;
-            ast->codec->sample_rate = avio_rb16(pb);
-            ast->codec->bits_per_coded_sample = avio_r8(pb);
-            ast->codec->channels    = avio_r8(pb);
-            ast->codec->codec_tag   = avio_rl32(pb);
-            ast->codec->codec_id    = ff_codec_get_id(ff_codec_smjpeg_audio_tags,
-                                                      ast->codec->codec_tag);
+            ast->codecpar->codec_type  = AVMEDIA_TYPE_AUDIO;
+            ast->codecpar->sample_rate = avio_rb16(pb);
+            ast->codecpar->bits_per_coded_sample = avio_r8(pb);
+            ast->codecpar->channels    = avio_r8(pb);
+            ast->codecpar->codec_tag   = avio_rl32(pb);
+            ast->codecpar->codec_id    = ff_codec_get_id(ff_codec_smjpeg_audio_tags,
+                                                         ast->codecpar->codec_tag);
             ast->duration           = duration;
             sc->audio_stream_index  = ast->index;
             avpriv_set_pts_info(ast, 32, 1, 1000);
@@ -109,13 +111,13 @@ static int smjpeg_read_header(AVFormatContext *s)
             vst = avformat_new_stream(s, 0);
             if (!vst)
                 return AVERROR(ENOMEM);
-            vst->nb_frames         = avio_rb32(pb);
-            vst->codec->codec_type = AVMEDIA_TYPE_VIDEO;
-            vst->codec->width      = avio_rb16(pb);
-            vst->codec->height     = avio_rb16(pb);
-            vst->codec->codec_tag  = avio_rl32(pb);
-            vst->codec->codec_id   = ff_codec_get_id(ff_codec_smjpeg_video_tags,
-                                                     vst->codec->codec_tag);
+            vst->nb_frames            = avio_rb32(pb);
+            vst->codecpar->codec_type = AVMEDIA_TYPE_VIDEO;
+            vst->codecpar->width      = avio_rb16(pb);
+            vst->codecpar->height     = avio_rb16(pb);
+            vst->codecpar->codec_tag  = avio_rl32(pb);
+            vst->codecpar->codec_id   = ff_codec_get_id(ff_codec_smjpeg_video_tags,
+                                                        vst->codecpar->codec_tag);
             vst->duration          = duration;
             sc->video_stream_index = vst->index;
             avpriv_set_pts_info(vst, 32, 1, 1000);
@@ -124,7 +126,7 @@ static int smjpeg_read_header(AVFormatContext *s)
         case SMJPEG_HEND:
             return 0;
         default:
-            av_log(s, AV_LOG_ERROR, "unknown header %x\n", htype);
+            av_log(s, AV_LOG_ERROR, "unknown header %"PRIx32"\n", htype);
             return AVERROR_INVALIDDATA;
         }
     }
@@ -139,7 +141,7 @@ static int smjpeg_read_packet(AVFormatContext *s, AVPacket *pkt)
     int64_t pos;
     int ret;
 
-    if (url_feof(s->pb))
+    if (avio_feof(s->pb))
         return AVERROR_EOF;
     pos   = avio_tell(s->pb);
     dtype = avio_rl32(s->pb);
@@ -164,7 +166,7 @@ static int smjpeg_read_packet(AVFormatContext *s, AVPacket *pkt)
         ret = AVERROR_EOF;
         break;
     default:
-        av_log(s, AV_LOG_ERROR, "unknown chunk %x\n", dtype);
+        av_log(s, AV_LOG_ERROR, "unknown chunk %"PRIx32"\n", dtype);
         ret = AVERROR_INVALIDDATA;
         break;
     }

@@ -20,12 +20,11 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#include "avcodec.h"
 #include "libavutil/intreadwrite.h"
 #include "libavutil/mem.h"
+
+#include "avcodec.h"
 #include "bytestream.h"
-#define BITSTREAM_READER_LE
-#include "get_bits.h"
 #include "internal.h"
 
 typedef struct XanContext {
@@ -38,7 +37,17 @@ typedef struct XanContext {
     GetByteContext gb;
 } XanContext;
 
-static av_cold int xan_decode_end(AVCodecContext *avctx);
+static av_cold int xan_decode_end(AVCodecContext *avctx)
+{
+    XanContext *s = avctx->priv_data;
+
+    av_frame_free(&s->pic);
+
+    av_freep(&s->y_buffer);
+    av_freep(&s->scratch_buffer);
+
+    return 0;
+}
 
 static av_cold int xan_decode_init(AVCodecContext *avctx)
 {
@@ -428,18 +437,6 @@ static int xan_decode_frame(AVCodecContext *avctx,
     return avpkt->size;
 }
 
-static av_cold int xan_decode_end(AVCodecContext *avctx)
-{
-    XanContext *s = avctx->priv_data;
-
-    av_frame_free(&s->pic);
-
-    av_freep(&s->y_buffer);
-    av_freep(&s->scratch_buffer);
-
-    return 0;
-}
-
 AVCodec ff_xan_wc4_decoder = {
     .name           = "xan_wc4",
     .long_name      = NULL_IF_CONFIG_SMALL("Wing Commander IV / Xxan"),
@@ -449,5 +446,5 @@ AVCodec ff_xan_wc4_decoder = {
     .init           = xan_decode_init,
     .close          = xan_decode_end,
     .decode         = xan_decode_frame,
-    .capabilities   = CODEC_CAP_DR1,
+    .capabilities   = AV_CODEC_CAP_DR1,
 };

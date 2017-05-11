@@ -23,6 +23,9 @@
 #include "avformat.h"
 #include "rawdec.h"
 
+#include "libavutil/intreadwrite.h"
+#include "libavcodec/internal.h"
+
 #define SEQ_START_CODE          0x000001b3
 #define GOP_START_CODE          0x000001b8
 #define PICTURE_START_CODE      0x00000100
@@ -35,14 +38,30 @@ static int mpegvideo_probe(AVProbeData *p)
 {
     uint32_t code= -1;
     int pic=0, seq=0, slice=0, pspack=0, vpes=0, apes=0, res=0, sicle=0;
-    int i;
+    const uint8_t *ptr = p->buf, *end = ptr + p->buf_size;
     uint32_t last = 0;
+    int j;
 
-    for(i=0; i<p->buf_size; i++){
-        code = (code<<8) + p->buf[i];
+    while (ptr < end) {
+        ptr = avpriv_find_start_code(ptr, end, &code);
         if ((code & 0xffffff00) == 0x100) {
             switch(code){
-            case     SEQ_START_CODE:   seq++; break;
+            case     SEQ_START_CODE:
+                if (!(ptr[3 + 1 + 2] & 0x20))
+                    break;
+                j = -1;
+                if (ptr[j + 8] & 2)
+                    j+= 64;
+                if (j >= end - ptr)
+                    break;
+                if (ptr[j + 8] & 1)
+                    j+= 64;
+                if (j >= end - ptr)
+                    break;
+                if (AV_RB24(ptr + j + 9) & 0xFFFFFE)
+                    break;
+                seq++;
+            break;
             case PICTURE_START_CODE:   pic++; break;
             case    PACK_START_CODE: pspack++; break;
             case              0x1b6:

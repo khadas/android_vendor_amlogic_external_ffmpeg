@@ -23,22 +23,20 @@
 #ifndef AVCODEC_PRORESDSP_H
 #define AVCODEC_PRORESDSP_H
 
+#include <stddef.h>
 #include <stdint.h>
-#include "dsputil.h"
+#include "avcodec.h"
 
 #define PRORES_BITS_PER_SAMPLE 10 ///< output precision of prores decoder
 
 typedef struct ProresDSPContext {
     int idct_permutation_type;
     uint8_t idct_permutation[64];
-    int dct_permutation_type;
-    uint8_t dct_permutation[64];
-    void (* idct_put) (uint16_t *out, int linesize, int16_t *block, const int16_t *qmat);
-    void (* fdct) (const uint16_t *src, int linesize, int16_t *block);
+    void (*idct_put)(uint16_t *out, ptrdiff_t linesize, int16_t *block, const int16_t *qmat);
 } ProresDSPContext;
 
 void ff_proresdsp_init(ProresDSPContext *dsp, AVCodecContext *avctx);
 
-void ff_proresdsp_x86_init(ProresDSPContext *dsp, AVCodecContext *avctx);
+void ff_proresdsp_init_x86(ProresDSPContext *dsp, AVCodecContext *avctx);
 
 #endif /* AVCODEC_PRORESDSP_H */

@@ -22,8 +22,8 @@
 #include "internal.h"
 #include "libavutil/common.h"
 
-typedef struct {
-    AVFrame  previous_frame;
+typedef struct ZeroCodecContext {
+    AVFrame  *previous_frame;
     z_stream zstream;
 } ZeroCodecContext;
 
@@ -32,7 +32,7 @@ static int zerocodec_decode_frame(AVCodecContext *avctx, void *data,
 {
     ZeroCodecContext *zc = avctx->priv_data;
     AVFrame *pic         = data;
-    AVFrame *prev_pic    = &zc->previous_frame;
+    AVFrame *prev_pic    = zc->previous_frame;
     z_stream *zstream    = &zc->zstream;
     uint8_t *prev        = prev_pic->data[0];
     uint8_t *dst;
@@ -91,8 +91,8 @@ static int zerocodec_decode_frame(AVCodecContext *avctx, void *data,
         dst  -= pic->linesize[0];
     }
 
-    av_frame_unref(&zc->previous_frame);
-    if ((ret = av_frame_ref(&zc->previous_frame, pic)) < 0)
+    av_frame_unref(zc->previous_frame);
+    if ((ret = av_frame_ref(zc->previous_frame, pic)) < 0)
         return ret;
 
     *got_frame = 1;
@@ -104,7 +104,7 @@ static av_cold int zerocodec_decode_close(AVCodecContext *avctx)
 {
     ZeroCodecContext *zc = avctx->priv_data;
 
-    av_frame_unref(&zc->previous_frame);
+    av_frame_free(&zc->previous_frame);
 
     inflateEnd(&zc->zstream);
 
@@ -130,6 +130,12 @@ static av_cold int zerocodec_decode_init(AVCodecContext *avctx)
         return AVERROR(ENOMEM);
     }
 
+    zc->previous_frame = av_frame_alloc();
+    if (!zc->previous_frame) {
+        zerocodec_decode_close(avctx);
+        return AVERROR(ENOMEM);
+    }
+
     return 0;
 }
 
@@ -142,5 +148,6 @@ AVCodec ff_zerocodec_decoder = {
     .init           = zerocodec_decode_init,
     .decode         = zerocodec_decode_frame,
     .close          = zerocodec_decode_close,
-    .capabilities   = CODEC_CAP_DR1,
+    .capabilities   = AV_CODEC_CAP_DR1,
+    .caps_internal  = FF_CODEC_CAP_INIT_THREADSAFE,
 };

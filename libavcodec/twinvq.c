@@ -215,7 +215,7 @@ static void dec_gain(TwinVQContext *tctx,
                      enum TwinVQFrameType ftype, float *out)
 {
     const TwinVQModeTab   *mtab =  tctx->mtab;
-    const TwinVQFrameData *bits = &tctx->bits;
+    const TwinVQFrameData *bits = &tctx->bits[tctx->cur_frame];
     int i, j;
     int sub        = mtab->fmode[ftype].sub;
     float step     = TWINVQ_AMP_MAX     / ((1 << TWINVQ_GAIN_BITS)     - 1);
@@ -358,7 +358,7 @@ static void imdct_and_window(TwinVQContext *tctx, enum TwinVQFrameType ftype,
 
         mdct->imdct_half(mdct, buf1 + bsize * j, in + bsize * j);
 
-        tctx->fdsp.vector_fmul_window(out2, prev_buf + (bsize - wsize) / 2,
+        tctx->fdsp->vector_fmul_window(out2, prev_buf + (bsize - wsize) / 2,
                                       buf1 + bsize * j,
                                       ff_sine_windows[av_log2(wsize)],
                                       wsize / 2);
@@ -376,11 +376,12 @@ static void imdct_and_window(TwinVQContext *tctx, enum TwinVQFrameType ftype,
 }
 
 static void imdct_output(TwinVQContext *tctx, enum TwinVQFrameType ftype,
-                         int wtype, float **out)
+                         int wtype, float **out, int offset)
 {
     const TwinVQModeTab *mtab = tctx->mtab;
     float *prev_buf           = tctx->prev_frame + tctx->last_block_pos[0];
     int size1, size2, i;
+    float *out1, *out2;
 
     for (i = 0; i < tctx->avctx->channels; i++)
         imdct_and_window(tctx, ftype, wtype,
@@ -394,15 +395,17 @@ static void imdct_output(TwinVQContext *tctx, enum TwinVQFrameType ftype,
     size2 = tctx->last_block_pos[0];
     size1 = mtab->size - size2;
 
-    memcpy(&out[0][0],     prev_buf,         size1 * sizeof(out[0][0]));
-    memcpy(&out[0][size1], tctx->curr_frame, size2 * sizeof(out[0][0]));
+    out1 = &out[0][0] + offset;
+    memcpy(out1,         prev_buf,         size1 * sizeof(*out1));
+    memcpy(out1 + size1, tctx->curr_frame, size2 * sizeof(*out1));
 
     if (tctx->avctx->channels == 2) {
-        memcpy(&out[1][0], &prev_buf[2 * mtab->size],
-               size1 * sizeof(out[1][0]));
-        memcpy(&out[1][size1], &tctx->curr_frame[2 * mtab->size],
-               size2 * sizeof(out[1][0]));
-        tctx->fdsp.butterflies_float(out[0], out[1], mtab->size);
+        out2 = &out[1][0] + offset;
+        memcpy(out2, &prev_buf[2 * mtab->size],
+               size1 * sizeof(*out2));
+        memcpy(out2 + size1, &tctx->curr_frame[2 * mtab->size],
+               size2 * sizeof(*out2));
+        tctx->fdsp->butterflies_float(out1, out2, mtab->size);
     }
 }
 
@@ -410,7 +413,7 @@ static void read_and_decode_spectrum(TwinVQContext *tctx, float *out,
                                      enum TwinVQFrameType ftype)
 {
     const TwinVQModeTab *mtab = tctx->mtab;
-    TwinVQFrameData *bits     = &tctx->bits;
+    TwinVQFrameData *bits     = &tctx->bits[tctx->cur_frame];
     int channels              = tctx->avctx->channels;
     int sub        = mtab->fmode[ftype].sub;
     int block_size = mtab->size / sub;
@@ -443,7 +446,7 @@ static void read_and_decode_spectrum(TwinVQContext *tctx, float *out,
                                bits->bark_use_hist[i][j], i,
                                tctx->tmp_buf, gain[sub * i + j], ftype);
 
-            tctx->fdsp.vector_fmul(chunk + block_size * j,
+            tctx->fdsp->vector_fmul(chunk + block_size * j,
                                    chunk + block_size * j,
                                    tctx->tmp_buf, block_size);
         }
@@ -458,7 +461,7 @@ static void read_and_decode_spectrum(TwinVQContext *tctx, float *out,
         dec_lpc_spectrum_inv(tctx, lsp, ftype, tctx->tmp_buf);
 
         for (j = 0; j < mtab->fmode[ftype].sub; j++) {
-            tctx->fdsp.vector_fmul(chunk, chunk, tctx->tmp_buf, block_size);
+            tctx->fdsp->vector_fmul(chunk, chunk, tctx->tmp_buf, block_size);
             chunk += block_size;
         }
     }
@@ -483,7 +486,7 @@ int ff_twinvq_decode_frame(AVCodecContext *avctx, void *data,
 
     /* get output buffer */
     if (tctx->discarded_packets >= 2) {
-        frame->nb_samples = mtab->size;
+        frame->nb_samples = mtab->size * tctx->frames_per_packet;
         if ((ret = ff_get_buffer(avctx, frame, 0)) < 0)
             return ret;
         out = (float **)frame->extended_data;
@@ -498,11 +501,17 @@ int ff_twinvq_decode_frame(AVCodecContext *avctx, void *data,
     if ((ret = tctx->read_bitstream(avctx, tctx, buf, buf_size)) < 0)
         return ret;
 
-    read_and_decode_spectrum(tctx, tctx->spectrum, tctx->bits.ftype);
+    for (tctx->cur_frame = 0; tctx->cur_frame < tctx->frames_per_packet;
+         tctx->cur_frame++) {
+        read_and_decode_spectrum(tctx, tctx->spectrum,
+                                 tctx->bits[tctx->cur_frame].ftype);
 
-    imdct_output(tctx, tctx->bits.ftype, tctx->bits.window_type, out);
+        imdct_output(tctx, tctx->bits[tctx->cur_frame].ftype,
+                     tctx->bits[tctx->cur_frame].window_type, out,
+                     tctx->cur_frame * mtab->size);
 
-    FFSWAP(float *, tctx->curr_frame, tctx->prev_frame);
+        FFSWAP(float *, tctx->curr_frame, tctx->prev_frame);
+    }
 
     if (tctx->discarded_packets < 2) {
         tctx->discarded_packets++;
@@ -512,7 +521,10 @@ int ff_twinvq_decode_frame(AVCodecContext *avctx, void *data,
 
     *got_frame_ptr = 1;
 
-    return ret;
+    // VQF can deliver packets 1 byte greater than block align
+    if (buf_size == avctx->block_align + 1)
+        return buf_size;
+    return avctx->block_align;
 }
 
 /**
@@ -534,24 +546,24 @@ static av_cold int init_mdct_win(TwinVQContext *tctx)
             return ret;
     }
 
-    FF_ALLOC_OR_GOTO(tctx->avctx, tctx->tmp_buf,
-                     mtab->size * sizeof(*tctx->tmp_buf), alloc_fail);
+    FF_ALLOC_ARRAY_OR_GOTO(tctx->avctx, tctx->tmp_buf,
+                     mtab->size, sizeof(*tctx->tmp_buf), alloc_fail);
 
-    FF_ALLOC_OR_GOTO(tctx->avctx, tctx->spectrum,
-                     2 * mtab->size * channels * sizeof(*tctx->spectrum),
+    FF_ALLOC_ARRAY_OR_GOTO(tctx->avctx, tctx->spectrum,
+                     2 * mtab->size, channels * sizeof(*tctx->spectrum),
                      alloc_fail);
-    FF_ALLOC_OR_GOTO(tctx->avctx, tctx->curr_frame,
-                     2 * mtab->size * channels * sizeof(*tctx->curr_frame),
+    FF_ALLOC_ARRAY_OR_GOTO(tctx->avctx, tctx->curr_frame,
+                     2 * mtab->size, channels * sizeof(*tctx->curr_frame),
                      alloc_fail);
-    FF_ALLOC_OR_GOTO(tctx->avctx, tctx->prev_frame,
-                     2 * mtab->size * channels * sizeof(*tctx->prev_frame),
+    FF_ALLOC_ARRAY_OR_GOTO(tctx->avctx, tctx->prev_frame,
+                     2 * mtab->size, channels * sizeof(*tctx->prev_frame),
                      alloc_fail);
 
     for (i = 0; i < 3; i++) {
         int m       = 4 * mtab->size / mtab->fmode[i].sub;
         double freq = 2 * M_PI / m;
-        FF_ALLOC_OR_GOTO(tctx->avctx, tctx->cos_tabs[i],
-                         (m / 4) * sizeof(*tctx->cos_tabs[i]), alloc_fail);
+        FF_ALLOC_ARRAY_OR_GOTO(tctx->avctx, tctx->cos_tabs[i],
+                         (m / 4), sizeof(*tctx->cos_tabs[i]), alloc_fail);
 
         for (j = 0; j <= m / 8; j++)
             tctx->cos_tabs[i][j] = cos((2 * j + 1) * freq);
@@ -692,7 +704,7 @@ static av_cold void init_bitstream_params(TwinVQContext *tctx)
             TWINVQ_WINDOW_TYPE_BITS +
             mtab->fmode[i].sub * (bse_bits[i] + n_ch * TWINVQ_SUB_GAIN_BITS);
 
-    if (tctx->codec == TWINVQ_CODEC_METASOUND) {
+    if (tctx->codec == TWINVQ_CODEC_METASOUND && !tctx->is_6kbps) {
         bsize_no_main_cb[1] += 2;
         bsize_no_main_cb[2] += 2;
     }
@@ -743,13 +755,14 @@ av_cold int ff_twinvq_decode_close(AVCodecContext *avctx)
 
     for (i = 0; i < 3; i++) {
         ff_mdct_end(&tctx->mdct_ctx[i]);
-        av_free(tctx->cos_tabs[i]);
+        av_freep(&tctx->cos_tabs[i]);
     }
 
-    av_free(tctx->curr_frame);
-    av_free(tctx->spectrum);
-    av_free(tctx->prev_frame);
-    av_free(tctx->tmp_buf);
+    av_freep(&tctx->curr_frame);
+    av_freep(&tctx->spectrum);
+    av_freep(&tctx->prev_frame);
+    av_freep(&tctx->tmp_buf);
+    av_freep(&tctx->fdsp);
 
     return 0;
 }
@@ -762,7 +775,25 @@ av_cold int ff_twinvq_decode_init(AVCodecContext *avctx)
     tctx->avctx       = avctx;
     avctx->sample_fmt = AV_SAMPLE_FMT_FLTP;
 
-    avpriv_float_dsp_init(&tctx->fdsp, avctx->flags & CODEC_FLAG_BITEXACT);
+    if (!avctx->block_align) {
+        avctx->block_align = tctx->frame_size + 7 >> 3;
+    } else if (avctx->block_align * 8 < tctx->frame_size) {
+        av_log(avctx, AV_LOG_ERROR, "Block align is %d bits, expected %d\n",
+               avctx->block_align * 8, tctx->frame_size);
+        return AVERROR_INVALIDDATA;
+    }
+    tctx->frames_per_packet = avctx->block_align * 8 / tctx->frame_size;
+    if (tctx->frames_per_packet > TWINVQ_MAX_FRAMES_PER_PACKET) {
+        av_log(avctx, AV_LOG_ERROR, "Too many frames per packet (%d)\n",
+               tctx->frames_per_packet);
+        return AVERROR_INVALIDDATA;
+    }
+
+    tctx->fdsp = avpriv_float_dsp_alloc(avctx->flags & AV_CODEC_FLAG_BITEXACT);
+    if (!tctx->fdsp) {
+        ff_twinvq_decode_close(avctx);
+        return AVERROR(ENOMEM);
+    }
     if ((ret = init_mdct_win(tctx))) {
         av_log(avctx, AV_LOG_ERROR, "Error initializing MDCT\n");
         ff_twinvq_decode_close(avctx);

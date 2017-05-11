@@ -244,6 +244,13 @@ static int mace_decode_frame(AVCodecContext *avctx, void *data,
     int i, j, k, l, ret;
     int is_mace3 = (avctx->codec_id == AV_CODEC_ID_MACE3);
 
+    if (buf_size % (avctx->channels << is_mace3)) {
+        av_log(avctx, AV_LOG_ERROR, "buffer size %d is odd\n", buf_size);
+        buf_size -= buf_size % (avctx->channels << is_mace3);
+        if (!buf_size)
+            return AVERROR_INVALIDDATA;
+    }
+
     /* get output buffer */
     frame->nb_samples = 3 * (buf_size << (1 - is_mace3)) / avctx->channels;
     if ((ret = ff_get_buffer(avctx, frame, 0)) < 0)
@@ -285,7 +292,7 @@ AVCodec ff_mace3_decoder = {
     .priv_data_size = sizeof(MACEContext),
     .init           = mace_decode_init,
     .decode         = mace_decode_frame,
-    .capabilities   = CODEC_CAP_DR1,
+    .capabilities   = AV_CODEC_CAP_DR1,
     .sample_fmts    = (const enum AVSampleFormat[]) { AV_SAMPLE_FMT_S16P,
                                                       AV_SAMPLE_FMT_NONE },
 };
@@ -298,7 +305,7 @@ AVCodec ff_mace6_decoder = {
     .priv_data_size = sizeof(MACEContext),
     .init           = mace_decode_init,
     .decode         = mace_decode_frame,
-    .capabilities   = CODEC_CAP_DR1,
+    .capabilities   = AV_CODEC_CAP_DR1,
     .sample_fmts    = (const enum AVSampleFormat[]) { AV_SAMPLE_FMT_S16P,
                                                       AV_SAMPLE_FMT_NONE },
 };
