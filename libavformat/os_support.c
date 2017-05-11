@@ -21,6 +21,7 @@
  */
 
 /* needed by inet_aton() */
+#define _DEFAULT_SOURCE
 #define _SVID_SOURCE
 
 #include "config.h"
@@ -32,13 +33,13 @@
 #if !HAVE_POLL_H
 #if HAVE_SYS_TIME_H
 #include <sys/time.h>
-#endif
+#endif /* HAVE_SYS_TIME_H */
 #if HAVE_WINSOCK2_H
 #include <winsock2.h>
 #elif HAVE_SYS_SELECT_H
 #include <sys/select.h>
-#endif
-#endif
+#endif /* HAVE_WINSOCK2_H */
+#endif /* !HAVE_POLL_H */
 
 #include "network.h"
 
@@ -82,7 +83,7 @@ int ff_getaddrinfo(const char *node, const char *service,
     win_getaddrinfo = GetProcAddress(ws2mod, "getaddrinfo");
     if (win_getaddrinfo)
         return win_getaddrinfo(node, service, hints, res);
-#endif
+#endif /* HAVE_WINSOCK2_H */
 
     *res = NULL;
     sin  = av_mallocz(sizeof(struct sockaddr_in));
@@ -156,11 +157,11 @@ void ff_freeaddrinfo(struct addrinfo *res)
         win_freeaddrinfo(res);
         return;
     }
-#endif
+#endif /* HAVE_WINSOCK2_H */
 
-    av_free(res->ai_canonname);
-    av_free(res->ai_addr);
-    av_free(res);
+    av_freep(&res->ai_canonname);
+    av_freep(&res->ai_addr);
+    av_freep(&res);
 }
 
 int ff_getnameinfo(const struct sockaddr *sa, int salen,
@@ -177,7 +178,7 @@ int ff_getnameinfo(const struct sockaddr *sa, int salen,
     win_getnameinfo = GetProcAddress(ws2mod, "getnameinfo");
     if (win_getnameinfo)
         return win_getnameinfo(sa, salen, host, hostlen, serv, servlen, flags);
-#endif
+#endif /* HAVE_WINSOCK2_H */
 
     if (sa->sa_family != AF_INET)
         return EAI_FAMILY;
@@ -204,16 +205,9 @@ int ff_getnameinfo(const struct sockaddr *sa, int salen,
     }
 
     if (serv && servlen > 0) {
-        struct servent *ent = NULL;
-#if HAVE_GETSERVBYPORT
         if (!(flags & NI_NUMERICSERV))
-            ent = getservbyport(sin->sin_port, flags & NI_DGRAM ? "udp" : "tcp");
-#endif
-
-        if (ent)
-            snprintf(serv, servlen, "%s", ent->s_name);
-        else
-            snprintf(serv, servlen, "%d", ntohs(sin->sin_port));
+            return EAI_FAIL;
+        snprintf(serv, servlen, "%d", ntohs(sin->sin_port));
     }
 
     return 0;
@@ -238,7 +232,7 @@ const char *ff_gai_strerror(int ecode)
 #if EAI_NODATA != EAI_NONAME
     case EAI_NODATA:
         return "No address associated with hostname";
-#endif
+#endif /* EAI_NODATA != EAI_NONAME */
     case EAI_NONAME:
         return "The name does not resolve for the supplied parameters";
     case EAI_SERVICE:
@@ -261,7 +255,7 @@ int ff_socket_nonblock(int socket, int enable)
         return fcntl(socket, F_SETFL, fcntl(socket, F_GETFL) | O_NONBLOCK);
     else
         return fcntl(socket, F_SETFL, fcntl(socket, F_GETFL) & ~O_NONBLOCK);
-#endif
+#endif /* HAVE_WINSOCK2_H */
 }
 
 #if !HAVE_POLL_H
@@ -279,7 +273,7 @@ int ff_poll(struct pollfd *fds, nfds_t numfds, int timeout)
         errno = EINVAL;
         return -1;
     }
-#endif
+#endif /* HAVE_WINSOCK2_H */
 
     FD_ZERO(&read_set);
     FD_ZERO(&write_set);
@@ -294,7 +288,7 @@ int ff_poll(struct pollfd *fds, nfds_t numfds, int timeout)
             errno = EINVAL;
             return -1;
         }
-#endif
+#endif /* !HAVE_WINSOCK2_H */
 
         if (fds[i].events & POLLIN)
             FD_SET(fds[i].fd, &read_set);
@@ -336,5 +330,6 @@ int ff_poll(struct pollfd *fds, nfds_t numfds, int timeout)
 
     return rc;
 }
-#endif /* HAVE_POLL_H */
+#endif /* !HAVE_POLL_H */
+
 #endif /* CONFIG_NETWORK */

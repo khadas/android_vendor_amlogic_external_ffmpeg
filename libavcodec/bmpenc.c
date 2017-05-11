@@ -66,16 +66,20 @@ static av_cold int bmp_encode_init(AVCodecContext *avctx){
 static int bmp_encode_frame(AVCodecContext *avctx, AVPacket *pkt,
                             const AVFrame *pict, int *got_packet)
 {
+    const AVFrame * const p = pict;
     int n_bytes_image, n_bytes_per_row, n_bytes, i, n, hsize, ret;
     const uint32_t *pal = NULL;
     uint32_t palette256[256];
     int pad_bytes_per_row, pal_entries = 0, compression = BMP_RGB;
     int bit_count = avctx->bits_per_coded_sample;
     uint8_t *ptr, *buf;
-    AVFrame * const p = (AVFrame *)pict;
 
-    p->pict_type= AV_PICTURE_TYPE_I;
-    p->key_frame= 1;
+#if FF_API_CODED_FRAME
+FF_DISABLE_DEPRECATION_WARNINGS
+    avctx->coded_frame->pict_type = AV_PICTURE_TYPE_I;
+    avctx->coded_frame->key_frame = 1;
+FF_ENABLE_DEPRECATION_WARNINGS
+#endif
     switch (avctx->pix_fmt) {
     case AV_PIX_FMT_RGB444:
         compression = BMP_BITFIELDS;
@@ -114,7 +118,7 @@ static int bmp_encode_frame(AVCodecContext *avctx, AVPacket *pkt,
 #define SIZE_BITMAPINFOHEADER 40
     hsize = SIZE_BITMAPFILEHEADER + SIZE_BITMAPINFOHEADER + (pal_entries << 2);
     n_bytes = n_bytes_image + hsize;
-    if ((ret = ff_alloc_packet2(avctx, pkt, n_bytes)) < 0)
+    if ((ret = ff_alloc_packet2(avctx, pkt, n_bytes, 0)) < 0)
         return ret;
     buf = pkt->data;
     bytestream_put_byte(&buf, 'B');                   // BITMAPFILEHEADER.bfType

@@ -173,10 +173,9 @@ static int decode_frame(AVCodecContext *avctx,
         return AVERROR_INVALIDDATA;
     }
 
-    if ((ret = av_image_check_size(w, h, 0, avctx)) < 0)
+    if ((ret = ff_set_dimensions(avctx, w, h)) < 0)
         return ret;
-    if (w != avctx->width || h != avctx->height)
-        avcodec_set_dimensions(avctx, w, h);
+
     if ((ret = ff_get_buffer(avctx, p, 0)) < 0)
         return ret;
     p->pict_type = AV_PICTURE_TYPE_I;
@@ -266,31 +265,32 @@ static int decode_frame(AVCodecContext *avctx,
                 line = advance_line(dst, line, stride, &y, h, interleave);
             } while (line);
         }
-    }
 
-    if (flags & TGA_RIGHTTOLEFT) { // right-to-left, needs horizontal flip
-        int x;
-        for (y = 0; y < h; y++) {
-            void *line = &p->data[0][y * p->linesize[0]];
-            for (x = 0; x < w >> 1; x++) {
-                switch (bpp) {
-                case 32:
-                    FFSWAP(uint32_t, ((uint32_t *)line)[x], ((uint32_t *)line)[w - x - 1]);
-                    break;
-                case 24:
-                    FFSWAP(uint8_t, ((uint8_t *)line)[3 * x    ], ((uint8_t *)line)[3 * w - 3 * x - 3]);
-                    FFSWAP(uint8_t, ((uint8_t *)line)[3 * x + 1], ((uint8_t *)line)[3 * w - 3 * x - 2]);
-                    FFSWAP(uint8_t, ((uint8_t *)line)[3 * x + 2], ((uint8_t *)line)[3 * w - 3 * x - 1]);
-                    break;
-                case 16:
-                    FFSWAP(uint16_t, ((uint16_t *)line)[x], ((uint16_t *)line)[w - x - 1]);
-                    break;
-                case 8:
-                    FFSWAP(uint8_t, ((uint8_t *)line)[x], ((uint8_t *)line)[w - x - 1]);
+        if (flags & TGA_RIGHTTOLEFT) { // right-to-left, needs horizontal flip
+            int x;
+            for (y = 0; y < h; y++) {
+                void *line = &p->data[0][y * p->linesize[0]];
+                for (x = 0; x < w >> 1; x++) {
+                    switch (bpp) {
+                    case 32:
+                        FFSWAP(uint32_t, ((uint32_t *)line)[x], ((uint32_t *)line)[w - x - 1]);
+                        break;
+                    case 24:
+                        FFSWAP(uint8_t, ((uint8_t *)line)[3 * x    ], ((uint8_t *)line)[3 * w - 3 * x - 3]);
+                        FFSWAP(uint8_t, ((uint8_t *)line)[3 * x + 1], ((uint8_t *)line)[3 * w - 3 * x - 2]);
+                        FFSWAP(uint8_t, ((uint8_t *)line)[3 * x + 2], ((uint8_t *)line)[3 * w - 3 * x - 1]);
+                        break;
+                    case 16:
+                        FFSWAP(uint16_t, ((uint16_t *)line)[x], ((uint16_t *)line)[w - x - 1]);
+                        break;
+                    case 8:
+                        FFSWAP(uint8_t, ((uint8_t *)line)[x], ((uint8_t *)line)[w - x - 1]);
+                    }
                 }
             }
         }
     }
+
 
     *got_frame = 1;
 
@@ -304,5 +304,5 @@ AVCodec ff_targa_decoder = {
     .id             = AV_CODEC_ID_TARGA,
     .priv_data_size = sizeof(TargaContext),
     .decode         = decode_frame,
-    .capabilities   = CODEC_CAP_DR1,
+    .capabilities   = AV_CODEC_CAP_DR1,
 };

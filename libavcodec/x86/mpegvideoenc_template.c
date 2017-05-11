@@ -20,6 +20,14 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
+#include <stdint.h>
+
+#include "libavutil/internal.h"
+#include "libavutil/x86/asm.h"
+#include "libavcodec/mpegutils.h"
+#include "libavcodec/mpegvideo.h"
+#include "fdct.h"
+
 #undef MMREG_WIDTH
 #undef MM
 #undef MOVQ
@@ -103,7 +111,7 @@ static int RENAME(dct_quantize)(MpegEncContext *s,
     av_assert2((7&(int)(&temp_block[0])) == 0); //did gcc align it correctly?
 
     //s->fdct (block);
-    RENAMEl(ff_fdct) (block); //cannot be anything else ...
+    RENAME_FDCT(ff_fdct)(block); // cannot be anything else ...
 
     if(s->dct_error_sum)
         s->denoise_dct(s, block);
@@ -142,70 +150,70 @@ static int RENAME(dct_quantize)(MpegEncContext *s,
     if((s->out_format == FMT_H263 || s->out_format == FMT_H261) && s->mpeg_quant==0){
 
         __asm__ volatile(
-            "movd %%"REG_a", "MM"3              \n\t" // last_non_zero_p1
+            "movd %%"FF_REG_a", "MM"3           \n\t" // last_non_zero_p1
             SPREADW(MM"3")
             "pxor "MM"7, "MM"7                  \n\t" // 0
             "pxor "MM"4, "MM"4                  \n\t" // 0
             MOVQ" (%2), "MM"5                   \n\t" // qmat[0]
             "pxor "MM"6, "MM"6                  \n\t"
             "psubw (%3), "MM"6                  \n\t" // -bias[0]
-            "mov $-128, %%"REG_a"               \n\t"
+            "mov $-128, %%"FF_REG_a"            \n\t"
             ".p2align 4                         \n\t"
             "1:                                 \n\t"
-            MOVQ" (%1, %%"REG_a"), "MM"0        \n\t" // block[i]
+            MOVQ" (%1, %%"FF_REG_a"), "MM"0     \n\t" // block[i]
             SAVE_SIGN(MM"1", MM"0")                   // ABS(block[i])
             "psubusw "MM"6, "MM"0               \n\t" // ABS(block[i]) + bias[0]
             "pmulhw "MM"5, "MM"0                \n\t" // (ABS(block[i])*qmat[0] - bias[0]*qmat[0])>>16
             "por "MM"0, "MM"4                   \n\t"
             RESTORE_SIGN(MM"1", MM"0")                // out=((ABS(block[i])*qmat[0] - bias[0]*qmat[0])>>16)*sign(block[i])
-            MOVQ" "MM"0, (%5, %%"REG_a")        \n\t"
+            MOVQ" "MM"0, (%5, %%"FF_REG_a")     \n\t"
             "pcmpeqw "MM"7, "MM"0               \n\t" // out==0 ? 0xFF : 0x00
-            MOVQ" (%4, %%"REG_a"), "MM"1        \n\t"
-            MOVQ" "MM"7, (%1, %%"REG_a")        \n\t" // 0
+            MOVQ" (%4, %%"FF_REG_a"), "MM"1     \n\t"
+            MOVQ" "MM"7, (%1, %%"FF_REG_a")     \n\t" // 0
             "pandn "MM"1, "MM"0                 \n\t"
             PMAXW(MM"0", MM"3")
-            "add $"MMREG_WIDTH", %%"REG_a"      \n\t"
+            "add $"MMREG_WIDTH", %%"FF_REG_a"   \n\t"
             " js 1b                             \n\t"
             PMAX(MM"3", MM"0")
-            "movd "MM"3, %%"REG_a"              \n\t"
-            "movzb %%al, %%"REG_a"              \n\t" // last_non_zero_p1
+            "movd "MM"3, %%"FF_REG_a"           \n\t"
+            "movzbl %%al, %%eax                 \n\t" // last_non_zero_p1
             : "+a" (last_non_zero_p1)
             : "r" (block+64), "r" (qmat), "r" (bias),
-              "r" (ff_inv_zigzag_direct16+64), "r" (temp_block+64)
+              "r" (inv_zigzag_direct16 + 64), "r" (temp_block + 64)
               XMM_CLOBBERS_ONLY("%xmm0", "%xmm1", "%xmm2", "%xmm3",
                                 "%xmm4", "%xmm5", "%xmm6", "%xmm7")
         );
     }else{ // FMT_H263
         __asm__ volatile(
-            "movd %%"REG_a", "MM"3              \n\t" // last_non_zero_p1
+            "movd %%"FF_REG_a", "MM"3           \n\t" // last_non_zero_p1
             SPREADW(MM"3")
             "pxor "MM"7, "MM"7                  \n\t" // 0
             "pxor "MM"4, "MM"4                  \n\t" // 0
-            "mov $-128, %%"REG_a"               \n\t"
+            "mov $-128, %%"FF_REG_a"            \n\t"
             ".p2align 4                         \n\t"
             "1:                                 \n\t"
-            MOVQ" (%1, %%"REG_a"), "MM"0        \n\t" // block[i]
+            MOVQ" (%1, %%"FF_REG_a"), "MM"0     \n\t" // block[i]
             SAVE_SIGN(MM"1", MM"0")                   // ABS(block[i])
-            MOVQ" (%3, %%"REG_a"), "MM"6        \n\t" // bias[0]
+            MOVQ" (%3, %%"FF_REG_a"), "MM"6     \n\t" // bias[0]
             "paddusw "MM"6, "MM"0               \n\t" // ABS(block[i]) + bias[0]
-            MOVQ" (%2, %%"REG_a"), "MM"5        \n\t" // qmat[i]
+            MOVQ" (%2, %%"FF_REG_a"), "MM"5     \n\t" // qmat[i]
             "pmulhw "MM"5, "MM"0                \n\t" // (ABS(block[i])*qmat[0] + bias[0]*qmat[0])>>16
             "por "MM"0, "MM"4                   \n\t"
             RESTORE_SIGN(MM"1", MM"0")                // out=((ABS(block[i])*qmat[0] - bias[0]*qmat[0])>>16)*sign(block[i])
-            MOVQ" "MM"0, (%5, %%"REG_a")        \n\t"
+            MOVQ" "MM"0, (%5, %%"FF_REG_a")     \n\t"
             "pcmpeqw "MM"7, "MM"0               \n\t" // out==0 ? 0xFF : 0x00
-            MOVQ" (%4, %%"REG_a"), "MM"1        \n\t"
-            MOVQ" "MM"7, (%1, %%"REG_a")        \n\t" // 0
+            MOVQ" (%4, %%"FF_REG_a"), "MM"1     \n\t"
+            MOVQ" "MM"7, (%1, %%"FF_REG_a")     \n\t" // 0
             "pandn "MM"1, "MM"0                 \n\t"
             PMAXW(MM"0", MM"3")
-            "add $"MMREG_WIDTH", %%"REG_a"      \n\t"
+            "add $"MMREG_WIDTH", %%"FF_REG_a"   \n\t"
             " js 1b                             \n\t"
             PMAX(MM"3", MM"0")
-            "movd "MM"3, %%"REG_a"              \n\t"
-            "movzb %%al, %%"REG_a"              \n\t" // last_non_zero_p1
+            "movd "MM"3, %%"FF_REG_a"           \n\t"
+            "movzbl %%al, %%eax                 \n\t" // last_non_zero_p1
             : "+a" (last_non_zero_p1)
             : "r" (block+64), "r" (qmat+64), "r" (bias+64),
-              "r" (ff_inv_zigzag_direct16+64), "r" (temp_block+64)
+              "r" (inv_zigzag_direct16 + 64), "r" (temp_block + 64)
               XMM_CLOBBERS_ONLY("%xmm0", "%xmm1", "%xmm2", "%xmm3",
                                 "%xmm4", "%xmm5", "%xmm6", "%xmm7")
         );
@@ -216,7 +224,7 @@ static int RENAME(dct_quantize)(MpegEncContext *s,
         "psubusw "MM"1, "MM"4               \n\t"
         "packuswb "MM"4, "MM"4              \n\t"
 #if COMPILE_TEMPLATE_SSE2
-        "packuswb "MM"4, "MM"4              \n\t"
+        "packsswb "MM"4, "MM"4              \n\t"
 #endif
         "movd "MM"4, %0                     \n\t" // *overflow
         : "=g" (*overflow)
@@ -226,7 +234,7 @@ static int RENAME(dct_quantize)(MpegEncContext *s,
     if(s->mb_intra) block[0]= level;
     else            block[0]= temp_block[0];
 
-    if(s->dsp.idct_permutation_type == FF_SIMPLE_IDCT_PERM){
+    if (s->idsp.perm_type == FF_IDCT_PERM_SIMPLE) {
         if(last_non_zero_p1 <= 1) goto end;
         block[0x08] = temp_block[0x01]; block[0x10] = temp_block[0x08];
         block[0x20] = temp_block[0x10];
@@ -270,7 +278,7 @@ static int RENAME(dct_quantize)(MpegEncContext *s,
         block[0x3E] = temp_block[0x3D]; block[0x27] = temp_block[0x36];
         block[0x3D] = temp_block[0x2F]; block[0x2F] = temp_block[0x37];
         block[0x37] = temp_block[0x3E]; block[0x3F] = temp_block[0x3F];
-    }else if(s->dsp.idct_permutation_type == FF_LIBMPEG2_IDCT_PERM){
+    }else if(s->idsp.perm_type == FF_IDCT_PERM_LIBMPEG2){
         if(last_non_zero_p1 <= 1) goto end;
         block[0x04] = temp_block[0x01];
         block[0x08] = temp_block[0x08]; block[0x10] = temp_block[0x10];

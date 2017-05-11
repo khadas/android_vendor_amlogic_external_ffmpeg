@@ -1,6 +1,6 @@
 /*
  * Wing Commander/Xan Video Decoder
- * Copyright (C) 2003 the ffmpeg project
+ * Copyright (C) 2003 The FFmpeg project
  *
  * This file is part of FFmpeg.
  *
@@ -34,9 +34,10 @@
 
 #include "libavutil/intreadwrite.h"
 #include "libavutil/mem.h"
+
+#define BITSTREAM_READER_LE
 #include "avcodec.h"
 #include "bytestream.h"
-#define BITSTREAM_READER_LE
 #include "get_bits.h"
 #include "internal.h"
 
@@ -71,7 +72,18 @@ typedef struct XanContext {
 
 } XanContext;
 
-static av_cold int xan_decode_end(AVCodecContext *avctx);
+static av_cold int xan_decode_end(AVCodecContext *avctx)
+{
+    XanContext *s = avctx->priv_data;
+
+    av_frame_free(&s->last_frame);
+
+    av_freep(&s->buffer1);
+    av_freep(&s->buffer2);
+    av_freep(&s->palettes);
+
+    return 0;
+}
 
 static av_cold int xan_decode_init(AVCodecContext *avctx)
 {
@@ -92,6 +104,7 @@ static av_cold int xan_decode_init(AVCodecContext *avctx)
         av_freep(&s->buffer1);
         return AVERROR(ENOMEM);
     }
+
     s->last_frame = av_frame_alloc();
     if (!s->last_frame) {
         xan_decode_end(avctx);
@@ -111,12 +124,11 @@ static int xan_huffman_decode(uint8_t *dest, int dest_len,
     uint8_t val = ival;
     uint8_t *dest_end = dest + dest_len;
     uint8_t *dest_start = dest;
+    int ret;
     GetBitContext gb;
 
-    if (ptr_len < 0)
-        return AVERROR_INVALIDDATA;
-
-    init_get_bits(&gb, ptr, ptr_len * 8);
+    if ((ret = init_get_bits8(&gb, ptr, ptr_len)) < 0)
+        return ret;
 
     while (val != 0x16) {
         unsigned idx = val - 0x17 + get_bits1(&gb) * byte;
@@ -252,7 +264,7 @@ static inline void xan_wc3_copy_pixel_run(XanContext *s, AVFrame *frame,
     prevframe_x = x + motion_x;
 
     if (prev_palette_plane == palette_plane && FFABS(curframe_index - prevframe_index) < pixel_count) {
-         avpriv_request_sample(s->avctx, "Overlapping copy\n");
+         avpriv_request_sample(s->avctx, "Overlapping copy");
          return ;
     }
 
@@ -545,7 +557,7 @@ static int xan_decode_frame(AVCodecContext *avctx,
         int i;
         tag  = bytestream2_get_le32(&ctx);
         size = bytestream2_get_be32(&ctx);
-        if(size < 0) {
+        if (size < 0) {
             av_log(avctx, AV_LOG_ERROR, "Invalid tag size %d\n", size);
             return AVERROR_INVALIDDATA;
         }
@@ -556,8 +568,8 @@ static int xan_decode_frame(AVCodecContext *avctx,
                 return AVERROR_INVALIDDATA;
             if (s->palettes_count >= PALETTES_MAX)
                 return AVERROR_INVALIDDATA;
-            tmpptr = av_realloc(s->palettes,
-                                (s->palettes_count + 1) * AVPALETTE_SIZE);
+            tmpptr = av_realloc_array(s->palettes,
+                                      s->palettes_count + 1, AVPALETTE_SIZE);
             if (!tmpptr)
                 return AVERROR(ENOMEM);
             s->palettes = tmpptr;
@@ -624,19 +636,6 @@ static int xan_decode_frame(AVCodecContext *avctx,
     return buf_size;
 }
 
-static av_cold int xan_decode_end(AVCodecContext *avctx)
-{
-    XanContext *s = avctx->priv_data;
-
-    av_frame_free(&s->last_frame);
-
-    av_freep(&s->buffer1);
-    av_freep(&s->buffer2);
-    av_freep(&s->palettes);
-
-    return 0;
-}
-
 AVCodec ff_xan_wc3_decoder = {
     .name           = "xan_wc3",
     .long_name      = NULL_IF_CONFIG_SMALL("Wing Commander III / Xan"),
@@ -646,5 +645,5 @@ AVCodec ff_xan_wc3_decoder = {
     .init           = xan_decode_init,
     .close          = xan_decode_end,
     .decode         = xan_decode_frame,
-    .capabilities   = CODEC_CAP_DR1,
+    .capabilities   = AV_CODEC_CAP_DR1,
 };

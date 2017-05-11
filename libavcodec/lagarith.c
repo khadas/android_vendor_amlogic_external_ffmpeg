@@ -25,11 +25,13 @@
  * @author Nathan Caldwell
  */
 
+#include <inttypes.h>
+
 #include "avcodec.h"
 #include "get_bits.h"
 #include "mathops.h"
-#include "dsputil.h"
 #include "lagarithrac.h"
+#include "lossless_videodsp.h"
 #include "thread.h"
 
 enum LagarithFrameType {
@@ -48,19 +50,20 @@ enum LagarithFrameType {
 
 typedef struct LagarithContext {
     AVCodecContext *avctx;
-    DSPContext dsp;
+    LLVidDSPContext llviddsp;
     int zeros;                  /**< number of consecutive zero bytes encountered */
     int zeros_rem;              /**< number of zero bytes remaining to output */
     uint8_t *rgb_planes;
+    int      rgb_planes_allocated;
     int rgb_stride;
 } LagarithContext;
 
 /**
- * Compute the 52bit mantissa of 1/(double)denom.
+ * Compute the 52-bit mantissa of 1/(double)denom.
  * This crazy format uses floats in an entropy coder and we have to match x86
  * rounding exactly, thus ordinary floats aren't portable enough.
  * @param denom denominator
- * @return 52bit mantissa
+ * @return 52-bit mantissa
  * @see softfloat_mul
  */
 static uint64_t softfloat_reciprocal(uint32_t denom)
@@ -77,9 +80,9 @@ static uint64_t softfloat_reciprocal(uint32_t denom)
 /**
  * (uint32_t)(x*f), where f has the given mantissa, and exponent 0
  * Used in combination with softfloat_reciprocal computes x/(double)denom.
- * @param x 32bit integer factor
+ * @param x 32-bit integer factor
  * @param mantissa mantissa of f with exponent 0
- * @return 32bit integer value (x*f)
+ * @return 32-bit integer value (x*f)
  * @see softfloat_reciprocal
  */
 static uint32_t softfloat_mul(uint32_t x, uint64_t mantissa)
@@ -125,7 +128,7 @@ static int lag_decode_prob(GetBitContext *gb, uint32_t *value)
     }
 
     val  = get_bits_long(gb, bits);
-    val |= 1 << bits;
+    val |= 1U << bits;
 
     *value = val - 1;
 
@@ -230,8 +233,8 @@ static void add_lag_median_prediction(uint8_t *dst, uint8_t *src1,
                                       uint8_t *diff, int w, int *left,
                                       int *left_top)
 {
-    /* This is almost identical to add_hfyu_median_prediction in dsputil.h.
-     * However the &0xFF on the gradient predictor yealds incorrect output
+    /* This is almost identical to add_hfyu_median_pred in huffyuvdsp.h.
+     * However the &0xFF on the gradient predictor yields incorrect output
      * for lagarith.
      */
     int i;
@@ -257,8 +260,7 @@ static void lag_pred_line(LagarithContext *l, uint8_t *buf,
 
     if (!line) {
         /* Left prediction only for first line */
-        L = l->dsp.add_hfyu_left_prediction(buf, buf,
-                                            width, 0);
+        L = l->llviddsp.add_left_pred(buf, buf, width, 0);
     } else {
         /* Left pixel is actually prev_row[width] */
         L = buf[width - stride - 1];
@@ -287,7 +289,7 @@ static void lag_pred_line_yuy2(LagarithContext *l, uint8_t *buf,
         L= buf[0];
         if (is_luma)
             buf[0] = 0;
-        l->dsp.add_hfyu_left_prediction(buf, buf, width, 0);
+        l->llviddsp.add_left_pred(buf, buf, width, 0);
         if (is_luma)
             buf[0] = L;
         return;
@@ -302,16 +304,15 @@ static void lag_pred_line_yuy2(LagarithContext *l, uint8_t *buf,
             L += buf[i];
             buf[i] = L;
         }
-        for (; i<width; i++) {
-            L     = mid_pred(L&0xFF, buf[i-stride], (L + buf[i-stride] - TL)&0xFF) + buf[i];
-            TL    = buf[i-stride];
-            buf[i]= L;
+        for (; i < width; i++) {
+            L      = mid_pred(L & 0xFF, buf[i - stride], (L + buf[i - stride] - TL) & 0xFF) + buf[i];
+            TL     = buf[i - stride];
+            buf[i] = L;
         }
     } else {
         TL = buf[width - (2 * stride) - 1];
         L  = buf[width - stride - 1];
-        l->dsp.add_hfyu_median_prediction(buf, buf - stride, buf, width,
-                                        &L, &TL);
+        l->llviddsp.add_median_pred(buf, buf - stride, buf, width, &L, &TL);
     }
 }
 
@@ -369,6 +370,10 @@ static int lag_decode_zero_run_line(LagarithContext *l, uint8_t *dst,
     uint8_t mask2 = -(esc_count < 3);
     uint8_t *end = dst + (width - 2);
 
+    avpriv_request_sample(l->avctx, "zero_run_line");
+
+    memset(dst, 0, width);
+
 output_zeros:
     if (l->zeros_rem) {
         count = FFMIN(l->zeros_rem, width - i);
@@ -423,6 +428,7 @@ static int lag_decode_arith_plane(LagarithContext *l, uint8_t *dst,
     GetBitContext gb;
     lag_rac rac;
     const uint8_t *src_end = src + src_size;
+    int ret;
 
     rac.avctx = l->avctx;
     l->zeros = 0;
@@ -440,7 +446,8 @@ static int lag_decode_arith_plane(LagarithContext *l, uint8_t *dst,
             offset += 4;
         }
 
-        init_get_bits(&gb, src + offset, src_size * 8);
+        if ((ret = init_get_bits8(&gb, src + offset, src_size - offset)) < 0)
+            return ret;
 
         if (lag_read_prob_header(&rac, &gb) < 0)
             return -1;
@@ -453,10 +460,12 @@ static int lag_decode_arith_plane(LagarithContext *l, uint8_t *dst,
 
         if (read > length)
             av_log(l->avctx, AV_LOG_WARNING,
-                   "Output more bytes than length (%d of %d)\n", read,
+                   "Output more bytes than length (%d of %"PRIu32")\n", read,
                    length);
     } else if (esc_count < 8) {
         esc_count -= 4;
+        src ++;
+        src_size --;
         if (esc_count > 0) {
             /* Zero run coding only, no range coding. */
             for (i = 0; i < height; i++) {
@@ -603,13 +612,12 @@ static int lag_decode_frame(AVCodecContext *avctx,
         offs[1] = offset_gu;
         offs[2] = offset_ry;
 
+        l->rgb_stride = FFALIGN(avctx->width, 16);
+        av_fast_malloc(&l->rgb_planes, &l->rgb_planes_allocated,
+                       l->rgb_stride * avctx->height * planes + 1);
         if (!l->rgb_planes) {
-            l->rgb_stride = FFALIGN(avctx->width, 16);
-            l->rgb_planes = av_malloc(l->rgb_stride * avctx->height * 4 + 16);
-            if (!l->rgb_planes) {
-                av_log(avctx, AV_LOG_ERROR, "cannot allocate temporary buffer\n");
-                return AVERROR(ENOMEM);
-            }
+            av_log(avctx, AV_LOG_ERROR, "cannot allocate temporary buffer\n");
+            return AVERROR(ENOMEM);
         }
         for (i = 0; i < planes; i++)
             srcs[i] = l->rgb_planes + (i + 1) * l->rgb_stride * avctx->height - l->rgb_stride;
@@ -667,10 +675,10 @@ static int lag_decode_frame(AVCodecContext *avctx,
         lag_decode_arith_plane(l, p->data[0], avctx->width, avctx->height,
                                p->linesize[0], buf + offset_ry,
                                buf_size - offset_ry);
-        lag_decode_arith_plane(l, p->data[1], avctx->width / 2,
+        lag_decode_arith_plane(l, p->data[1], (avctx->width + 1) / 2,
                                avctx->height, p->linesize[1],
                                buf + offset_gu, buf_size - offset_gu);
-        lag_decode_arith_plane(l, p->data[2], avctx->width / 2,
+        lag_decode_arith_plane(l, p->data[2], (avctx->width + 1) / 2,
                                avctx->height, p->linesize[2],
                                buf + offset_bv, buf_size - offset_bv);
         break;
@@ -694,16 +702,16 @@ static int lag_decode_frame(AVCodecContext *avctx,
         lag_decode_arith_plane(l, p->data[0], avctx->width, avctx->height,
                                p->linesize[0], buf + offset_ry,
                                buf_size - offset_ry);
-        lag_decode_arith_plane(l, p->data[2], avctx->width / 2,
-                               avctx->height / 2, p->linesize[2],
+        lag_decode_arith_plane(l, p->data[2], (avctx->width + 1) / 2,
+                               (avctx->height + 1) / 2, p->linesize[2],
                                buf + offset_gu, buf_size - offset_gu);
-        lag_decode_arith_plane(l, p->data[1], avctx->width / 2,
-                               avctx->height / 2, p->linesize[1],
+        lag_decode_arith_plane(l, p->data[1], (avctx->width + 1) / 2,
+                               (avctx->height + 1) / 2, p->linesize[1],
                                buf + offset_bv, buf_size - offset_bv);
         break;
     default:
         av_log(avctx, AV_LOG_ERROR,
-               "Unsupported Lagarith frame type: %#x\n", frametype);
+               "Unsupported Lagarith frame type: %#"PRIx8"\n", frametype);
         return AVERROR_PATCHWELCOME;
     }
 
@@ -717,10 +725,20 @@ static av_cold int lag_decode_init(AVCodecContext *avctx)
     LagarithContext *l = avctx->priv_data;
     l->avctx = avctx;
 
-    ff_dsputil_init(&l->dsp, avctx);
+    ff_llviddsp_init(&l->llviddsp);
 
     return 0;
 }
+
+#if HAVE_THREADS
+static av_cold int lag_decode_init_thread_copy(AVCodecContext *avctx)
+{
+    LagarithContext *l = avctx->priv_data;
+    l->avctx = avctx;
+
+    return 0;
+}
+#endif
 
 static av_cold int lag_decode_end(AVCodecContext *avctx)
 {
@@ -738,7 +756,8 @@ AVCodec ff_lagarith_decoder = {
     .id             = AV_CODEC_ID_LAGARITH,
     .priv_data_size = sizeof(LagarithContext),
     .init           = lag_decode_init,
+    .init_thread_copy = ONLY_IF_THREADS_ENABLED(lag_decode_init_thread_copy),
     .close          = lag_decode_end,
     .decode         = lag_decode_frame,
-    .capabilities   = CODEC_CAP_DR1 | CODEC_CAP_FRAME_THREADS,
+    .capabilities   = AV_CODEC_CAP_DR1 | AV_CODEC_CAP_FRAME_THREADS,
 };

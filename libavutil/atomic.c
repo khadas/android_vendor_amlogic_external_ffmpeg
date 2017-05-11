@@ -18,6 +18,7 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
+#include "config.h"
 #include "atomic.h"
 
 #if !HAVE_ATOMICS_NATIVE
@@ -63,7 +64,7 @@ void *avpriv_atomic_ptr_cas(void * volatile *ptr, void *oldval, void *newval)
     void *ret;
     pthread_mutex_lock(&atomic_lock);
     ret = *ptr;
-    if (*ptr == oldval)
+    if (ret == oldval)
         *ptr = newval;
     pthread_mutex_unlock(&atomic_lock);
     return ret;
@@ -96,28 +97,13 @@ void *avpriv_atomic_ptr_cas(void * volatile *ptr, void *oldval, void *newval)
     return *ptr;
 }
 
-#else
+#else /* HAVE_THREADS */
 
+/* This should never trigger, unless a new threading implementation
+ * without correct atomics dependencies in configure or a corresponding
+ * atomics implementation is added. */
 #error "Threading is enabled, but there is no implementation of atomic operations available"
 
 #endif /* HAVE_PTHREADS */
 
-#endif /* !HAVE_MEMORYBARRIER && !HAVE_SYNC_VAL_COMPARE_AND_SWAP && !HAVE_MACHINE_RW_BARRIER */
-
-#ifdef TEST
-#include "avassert.h"
-
-int main(void)
-{
-    volatile int val = 1;
-    int res;
-
-    res = avpriv_atomic_int_add_and_fetch(&val, 1);
-    av_assert0(res == 2);
-    avpriv_atomic_int_set(&val, 3);
-    res = avpriv_atomic_int_get(&val);
-    av_assert0(res == 3);
-
-    return 0;
-}
-#endif
+#endif /* !HAVE_ATOMICS_NATIVE */

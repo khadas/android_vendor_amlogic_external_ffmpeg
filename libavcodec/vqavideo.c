@@ -1,6 +1,6 @@
 /*
  * Westwood Studios VQA Video Decoder
- * Copyright (C) 2003 the ffmpeg project
+ * Copyright (C) 2003 The FFmpeg project
  *
  * This file is part of FFmpeg.
  *
@@ -179,7 +179,7 @@ static av_cold int vqa_decode_init(AVCodecContext *avctx)
     /* allocate decode buffer */
     s->decode_buffer_size = (s->width / s->vector_width) *
         (s->height / s->vector_height) * 2;
-    s->decode_buffer = av_malloc(s->decode_buffer_size);
+    s->decode_buffer = av_mallocz(s->decode_buffer_size);
     if (!s->decode_buffer)
         goto fail;
 
@@ -231,14 +231,20 @@ static int decode_format80(VqaContext *s, int src_size,
     unsigned char color;
     int i;
 
+    if (src_size < 0 || src_size > bytestream2_get_bytes_left(&s->gb)) {
+        av_log(s->avctx, AV_LOG_ERROR, "Chunk size %d is out of range\n",
+               src_size);
+        return AVERROR_INVALIDDATA;
+    }
+
     start = bytestream2_tell(&s->gb);
     while (bytestream2_tell(&s->gb) - start < src_size) {
         opcode = bytestream2_get_byte(&s->gb);
-        av_dlog(s->avctx, "opcode %02X: ", opcode);
+        ff_tlog(s->avctx, "opcode %02X: ", opcode);
 
         /* 0x80 means that frame is finished */
         if (opcode == 0x80)
-            return 0;
+            break;
 
         if (dest_index >= dest_size) {
             av_log(s->avctx, AV_LOG_ERROR, "decode_format80 problem: dest_index (%d) exceeded dest_size (%d)\n",
@@ -250,7 +256,7 @@ static int decode_format80(VqaContext *s, int src_size,
 
             count   = bytestream2_get_le16(&s->gb);
             src_pos = bytestream2_get_le16(&s->gb);
-            av_dlog(s->avctx, "(1) copy %X bytes from absolute pos %X\n", count, src_pos);
+            ff_tlog(s->avctx, "(1) copy %X bytes from absolute pos %X\n", count, src_pos);
             CHECK_COUNT();
             CHECK_COPY(src_pos);
             for (i = 0; i < count; i++)
@@ -261,7 +267,7 @@ static int decode_format80(VqaContext *s, int src_size,
 
             count = bytestream2_get_le16(&s->gb);
             color = bytestream2_get_byte(&s->gb);
-            av_dlog(s->avctx, "(2) set %X bytes to %02X\n", count, color);
+            ff_tlog(s->avctx, "(2) set %X bytes to %02X\n", count, color);
             CHECK_COUNT();
             memset(&dest[dest_index], color, count);
             dest_index += count;
@@ -270,7 +276,7 @@ static int decode_format80(VqaContext *s, int src_size,
 
             count = (opcode & 0x3F) + 3;
             src_pos = bytestream2_get_le16(&s->gb);
-            av_dlog(s->avctx, "(3) copy %X bytes from absolute pos %X\n", count, src_pos);
+            ff_tlog(s->avctx, "(3) copy %X bytes from absolute pos %X\n", count, src_pos);
             CHECK_COUNT();
             CHECK_COPY(src_pos);
             for (i = 0; i < count; i++)
@@ -280,7 +286,7 @@ static int decode_format80(VqaContext *s, int src_size,
         } else if (opcode > 0x80) {
 
             count = opcode & 0x3F;
-            av_dlog(s->avctx, "(4) copy %X bytes from source to dest\n", count);
+            ff_tlog(s->avctx, "(4) copy %X bytes from source to dest\n", count);
             CHECK_COUNT();
             bytestream2_get_buffer(&s->gb, &dest[dest_index], count);
             dest_index += count;
@@ -289,7 +295,7 @@ static int decode_format80(VqaContext *s, int src_size,
 
             count = ((opcode & 0x70) >> 4) + 3;
             src_pos = bytestream2_get_byte(&s->gb) | ((opcode & 0x0F) << 8);
-            av_dlog(s->avctx, "(5) copy %X bytes from relpos %X\n", count, src_pos);
+            ff_tlog(s->avctx, "(5) copy %X bytes from relpos %X\n", count, src_pos);
             CHECK_COUNT();
             CHECK_COPY(dest_index - src_pos);
             for (i = 0; i < count; i++)
@@ -303,9 +309,11 @@ static int decode_format80(VqaContext *s, int src_size,
      * codebook entry; it is not important for compressed codebooks because
      * not every entry needs to be filled */
     if (check_size)
-        if (dest_index < dest_size)
+        if (dest_index < dest_size) {
             av_log(s->avctx, AV_LOG_ERROR, "decode_format80 problem: decode finished with dest_index (%d) < dest_size (%d)\n",
                 dest_index, dest_size);
+            memset(dest + dest_index, 0, dest_size - dest_index);
+        }
 
     return 0; // let's display what we decoded anyway
 }
@@ -376,12 +384,8 @@ static int vqa_decode_chunk(VqaContext *s, AVFrame *frame)
             break;
 
         default:
-            av_log(s->avctx, AV_LOG_ERROR, "Found unknown chunk type: %c%c%c%c (%08X)\n",
-            (chunk_type >> 24) & 0xFF,
-            (chunk_type >> 16) & 0xFF,
-            (chunk_type >>  8) & 0xFF,
-            (chunk_type >>  0) & 0xFF,
-            chunk_type);
+            av_log(s->avctx, AV_LOG_ERROR, "Found unknown chunk type: %s (%08X)\n",
+                   av_fourcc2str(av_bswap32(chunk_type)), chunk_type);
             break;
         }
 
@@ -642,5 +646,5 @@ AVCodec ff_vqa_decoder = {
     .init           = vqa_decode_init,
     .close          = vqa_decode_end,
     .decode         = vqa_decode_frame,
-    .capabilities   = CODEC_CAP_DR1,
+    .capabilities   = AV_CODEC_CAP_DR1,
 };

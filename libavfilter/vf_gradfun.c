@@ -26,9 +26,9 @@
  *
  * Apply a boxblur debanding algorithm (based on the gradfun2db
  * AviSynth filter by prunedtree).
- * Foreach pixel, if it's within threshold of the blurred value, make it closer.
- * So now we have a smoothed and higher bitdepth version of all the shallow
- * gradients, while leaving detailed areas untouched.
+ * For each pixel, if it is within the threshold of the blurred value, make it
+ * closer. So now we have a smoothed and higher bitdepth version of all the
+ * shallow gradients, while leaving detailed areas untouched.
  * Dither it back to 8bit.
  */
 
@@ -118,6 +118,7 @@ static void filter(GradFunContext *ctx, uint8_t *dst, const uint8_t *src, int wi
         ctx->filter_line(dst + y * dst_linesize, src + y * src_linesize, dc - r / 2, width, thresh, dither[y & 7]);
         if (++y >= height) break;
     }
+    emms_c();
 }
 
 static av_cold int init(AVFilterContext *ctx)
@@ -154,10 +155,10 @@ static int query_formats(AVFilterContext *ctx)
         AV_PIX_FMT_GBRP,
         AV_PIX_FMT_NONE
     };
-
-    ff_set_common_formats(ctx, ff_make_format_list(pix_fmts));
-
-    return 0;
+    AVFilterFormats *fmts_list = ff_make_format_list(pix_fmts);
+    if (!fmts_list)
+        return AVERROR(ENOMEM);
+    return ff_set_common_formats(ctx, fmts_list);
 }
 
 static int config_input(AVFilterLink *inlink)
@@ -172,8 +173,8 @@ static int config_input(AVFilterLink *inlink)
     if (!s->buf)
         return AVERROR(ENOMEM);
 
-    s->chroma_w = FF_CEIL_RSHIFT(inlink->w, hsub);
-    s->chroma_h = FF_CEIL_RSHIFT(inlink->h, vsub);
+    s->chroma_w = AV_CEIL_RSHIFT(inlink->w, hsub);
+    s->chroma_h = AV_CEIL_RSHIFT(inlink->h, vsub);
     s->chroma_r = av_clip(((((s->radius >> hsub) + (s->radius >> vsub)) / 2 ) + 1) & ~1, 4, 32);
 
     return 0;

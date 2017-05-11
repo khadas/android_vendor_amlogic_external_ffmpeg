@@ -149,7 +149,7 @@ static int very_broken_op(int a, int b)
 /**
  * Sum to data a periodic peak of a given period, width and shape.
  *
- * @param period the period of the peak divised by 400.0
+ * @param period the period of the peak divided by 400.0
  */
 static void add_peak(int period, int width, const float *shape,
                      float ppc_gain, float *speech, int len)
@@ -251,14 +251,15 @@ static void read_cb_data(TwinVQContext *tctx, GetBitContext *gb,
 static int twinvq_read_bitstream(AVCodecContext *avctx, TwinVQContext *tctx,
                                  const uint8_t *buf, int buf_size)
 {
-    TwinVQFrameData     *bits = &tctx->bits;
+    TwinVQFrameData     *bits = &tctx->bits[0];
     const TwinVQModeTab *mtab = tctx->mtab;
     int channels              = tctx->avctx->channels;
     int sub;
     GetBitContext gb;
-    int i, j, k;
+    int i, j, k, ret;
 
-    init_get_bits(&gb, buf, buf_size * 8);
+    if ((ret = init_get_bits8(&gb, buf, buf_size)) < 0)
+        return ret;
     skip_bits(&gb, get_bits(&gb, 8));
 
     bits->window_type = get_bits(&gb, TWINVQ_WINDOW_TYPE_BITS);
@@ -268,7 +269,7 @@ static int twinvq_read_bitstream(AVCodecContext *avctx, TwinVQContext *tctx,
         return AVERROR_INVALIDDATA;
     }
 
-    bits->ftype = ff_twinvq_wtype_to_ftype_table[tctx->bits.window_type];
+    bits->ftype = ff_twinvq_wtype_to_ftype_table[tctx->bits[0].window_type];
 
     sub = mtab->fmode[bits->ftype].sub;
 
@@ -396,13 +397,18 @@ static av_cold int twinvq_decode_init(AVCodecContext *avctx)
         return -1;
     }
 
-    avctx->block_align = (avctx->bit_rate * tctx->mtab->size
-                                          / avctx->sample_rate + 15) / 8;
-
     tctx->codec          = TWINVQ_CODEC_VQF;
     tctx->read_bitstream = twinvq_read_bitstream;
     tctx->dec_bark_env   = dec_bark_env;
     tctx->decode_ppc     = decode_ppc;
+    tctx->frame_size     = avctx->bit_rate * tctx->mtab->size
+                                           / avctx->sample_rate + 8;
+    tctx->is_6kbps       = 0;
+    if (avctx->block_align && avctx->block_align * 8 / tctx->frame_size > 1) {
+        av_log(avctx, AV_LOG_ERROR,
+               "VQF TwinVQ should have only one frame per packet\n");
+        return AVERROR_INVALIDDATA;
+    }
 
     return ff_twinvq_decode_init(avctx);
 }
@@ -416,7 +422,7 @@ AVCodec ff_twinvq_decoder = {
     .init           = twinvq_decode_init,
     .close          = ff_twinvq_decode_close,
     .decode         = ff_twinvq_decode_frame,
-    .capabilities   = CODEC_CAP_DR1,
+    .capabilities   = AV_CODEC_CAP_DR1,
     .sample_fmts    = (const enum AVSampleFormat[]) { AV_SAMPLE_FMT_FLTP,
                                                       AV_SAMPLE_FMT_NONE },
 };

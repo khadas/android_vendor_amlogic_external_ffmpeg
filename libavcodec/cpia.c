@@ -76,15 +76,15 @@ static int cpia_decode_frame(AVCodecContext *avctx,
 
     // currently unsupported properties
     if (header[17] == SUBSAMPLE_422) {
-        av_log(avctx, AV_LOG_ERROR, "Unsupported subsample!\n");
+        avpriv_report_missing_feature(avctx, "4:2:2 subsampling");
         return AVERROR_PATCHWELCOME;
     }
     if (header[18] == YUVORDER_UYVY) {
-        av_log(avctx, AV_LOG_ERROR, "Unsupported YUV byte order!\n");
+        avpriv_report_missing_feature(avctx, "YUV byte order UYVY");
         return AVERROR_PATCHWELCOME;
     }
     if (header[29] == DECIMATION_ENAB) {
-        av_log(avctx, AV_LOG_ERROR, "Decimation unsupported!\n");
+        avpriv_report_missing_feature(avctx, "Decimation");
         return AVERROR_PATCHWELCOME;
     }
 
@@ -114,7 +114,7 @@ static int cpia_decode_frame(AVCodecContext *avctx,
 
         if (src_size < linelength) {
             av_frame_set_decode_error_flags(frame, FF_DECODE_ERROR_INVALID_BITSTREAM);
-            av_log(avctx, AV_LOG_WARNING, "Frame ended enexpectedly!\n");
+            av_log(avctx, AV_LOG_WARNING, "Frame ended unexpectedly!\n");
             break;
         }
         if (src[linelength - 1] != EOL) {
@@ -134,7 +134,7 @@ static int cpia_decode_frame(AVCodecContext *avctx,
         v_end = v + frame->linesize[2] - 1;
 
         if ((i & 1) && header[17] == SUBSAMPLE_420) {
-            /* We are on a odd line and 420 subsample is used.
+            /* We are on an odd line and 420 subsample is used.
              * On this line only Y values are specified, one per pixel.
              */
             for (j = 0; j < linelength - 1; j++) {
@@ -229,5 +229,5 @@ AVCodec ff_cpia_decoder = {
     .init           = cpia_decode_init,
     .close          = cpia_decode_end,
     .decode         = cpia_decode_frame,
-    .capabilities   = CODEC_CAP_DR1,
+    .capabilities   = AV_CODEC_CAP_DR1,
 };

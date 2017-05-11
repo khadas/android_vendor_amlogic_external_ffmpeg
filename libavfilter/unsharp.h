@@ -1,5 +1,6 @@
 /*
  * Copyright (C) 2013 Wei Gao <weigao@multicorewareinc.com>
+ * Copyright (C) 2013 Lenny Wang
  *
  * This file is part of FFmpeg.
  *
@@ -33,8 +34,17 @@
 #if CONFIG_OPENCL
 
 typedef struct {
+    cl_command_queue command_queue;
+    cl_program program;
+    cl_kernel kernel_default;
+    cl_kernel kernel_luma;
+    cl_kernel kernel_chroma;
     cl_mem cl_luma_mask;
     cl_mem cl_chroma_mask;
+    cl_mem cl_luma_mask_x;
+    cl_mem cl_chroma_mask_x;
+    cl_mem cl_luma_mask_y;
+    cl_mem cl_chroma_mask_y;
     int in_plane_size[8];
     int out_plane_size[8];
     int plane_num;
@@ -42,7 +52,7 @@ typedef struct {
     size_t cl_inbuf_size;
     cl_mem cl_outbuf;
     size_t cl_outbuf_size;
-    AVOpenCLKernelEnv kernel_env;
+    int use_fast_kernels;
 } UnsharpOpenclContext;
 
 #endif
@@ -58,7 +68,7 @@ typedef struct UnsharpFilterParam {
     uint32_t *sc[MAX_MATRIX_SIZE - 1];       ///< finite state machine storage
 } UnsharpFilterParam;
 
-typedef struct {
+typedef struct UnsharpContext {
     const AVClass *class;
     int lmsize_x, lmsize_y, cmsize_x, cmsize_y;
     float lamount, camount;

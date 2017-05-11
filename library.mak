@@ -10,26 +10,9 @@ INSTHEADERS := $(INSTHEADERS) $(HEADERS:%=$(SUBDIR)%)
 all-$(CONFIG_STATIC): $(SUBDIR)$(LIBNAME)
 all-$(CONFIG_SHARED): $(SUBDIR)$(SLIBNAME)
 
-$(SUBDIR)%-test.o: $(SUBDIR)%-test.c
-	$(COMPILE_C)
-
-$(SUBDIR)%-test.o: $(SUBDIR)%.c
-	$(COMPILE_C)
-
-$(SUBDIR)%-test.i: $(SUBDIR)%-test.c
-	$(CC) $(CCFLAGS) $(CC_E) $<
-
-$(SUBDIR)%-test.i: $(SUBDIR)%.c
-	$(CC) $(CCFLAGS) $(CC_E) $<
-
-$(SUBDIR)x86/%.o: $(SUBDIR)x86/%.asm
-	$(DEPYASM) $(YASMFLAGS) -I $(<D)/ -M -o $@ $< > $(@:.o=.d)
-	$(YASM) $(YASMFLAGS) -I $(<D)/ -o $@ $<
-	-$(STRIP) -wN '..@*' $@
-
 LIBOBJS := $(OBJS) $(SUBDIR)%.h.o $(TESTOBJS)
 $(LIBOBJS) $(LIBOBJS:.o=.s) $(LIBOBJS:.o=.i):   CPPFLAGS += -DHAVE_AV_CONFIG_H
-$(TESTOBJS) $(TESTOBJS:.o=.i): CPPFLAGS += -DTEST
+$(TESTOBJS) $(TESTOBJS:.o=.i): CFLAGS += -Umain
 
 $(SUBDIR)$(LIBNAME): $(OBJS)
 	$(RM) $@
@@ -42,18 +25,21 @@ install-libs-$(CONFIG_STATIC): install-lib$(NAME)-static
 install-libs-$(CONFIG_SHARED): install-lib$(NAME)-shared
 
 define RULES
-$(EXAMPLES) $(TOOLS): THISLIB = $(FULLNAME:%=$(LD_LIB))
-$(TESTPROGS):         THISLIB = $(SUBDIR)$(LIBNAME)
+$(TOOLS):     THISLIB = $(FULLNAME:%=$(LD_LIB))
+$(TESTPROGS): THISLIB = $(SUBDIR)$(LIBNAME)
 
-$(EXAMPLES) $(TESTPROGS) $(TOOLS): %$(EXESUF): %.o $(EXEOBJS)
-	$$(LD) $(LDFLAGS) $$(LD_O) $$(filter %.o,$$^) $$(THISLIB) $(FFEXTRALIBS) $$(ELIBS)
+$(TESTPROGS) $(TOOLS): %$(EXESUF): %.o $(EXEOBJS)
+	$$(LD) $(LDFLAGS) $(LDEXEFLAGS) $$(LD_O) $$(filter %.o,$$^) $$(THISLIB) $(FFEXTRALIBS) $$(ELIBS)
+
+$(SUBDIR)lib$(NAME).ver: $(SUBDIR)lib$(NAME).v $(OBJS)
+	$$(M)sed 's/MAJOR/$(lib$(NAME)_VERSION_MAJOR)/' $$< | $(VERSION_SCRIPT_POSTPROCESS_CMD) > $$@
 
 $(SUBDIR)$(SLIBNAME): $(SUBDIR)$(SLIBNAME_WITH_MAJOR)
 	$(Q)cd ./$(SUBDIR) && $(LN_S) $(SLIBNAME_WITH_MAJOR) $(SLIBNAME)
 
-$(SUBDIR)$(SLIBNAME_WITH_MAJOR): $(OBJS) $(SUBDIR)lib$(NAME).ver
+$(SUBDIR)$(SLIBNAME_WITH_MAJOR): $(OBJS) $(SLIBOBJS) $(SUBDIR)lib$(NAME).ver
 	$(SLIB_CREATE_DEF_CMD)
-	$$(LD) $(SHFLAGS) $(LDFLAGS) $$(LD_O) $$(filter %.o,$$^) $(FFEXTRALIBS)
+	$$(LD) $(SHFLAGS) $(LDFLAGS) $(LDLIBFLAGS) $$(LD_O) $$(filter %.o,$$^) $(FFEXTRALIBS)
 	$(SLIB_EXTRA_CMD)
 
 ifdef SUBDIR
@@ -61,11 +47,12 @@ $(SUBDIR)$(SLIBNAME_WITH_MAJOR): $(DEP_LIBS)
 endif
 
 clean::
-	$(RM) $(addprefix $(SUBDIR),*-example$(EXESUF) *-test$(EXESUF) $(CLEANFILES) $(CLEANSUFFIXES) $(LIBSUFFIXES)) \
-	    $(CLEANSUFFIXES:%=$(SUBDIR)$(ARCH)/%)
-
+	$(RM) $(addprefix $(SUBDIR),$(CLEANFILES) $(CLEANSUFFIXES) $(LIBSUFFIXES)) \
+	    $(CLEANSUFFIXES:%=$(SUBDIR)$(ARCH)/%) $(CLEANSUFFIXES:%=$(SUBDIR)tests/%)
+ 
 distclean:: clean
-	$(RM) $(DISTCLEANSUFFIXES:%=$(SUBDIR)%) $(DISTCLEANSUFFIXES:%=$(SUBDIR)$(ARCH)/%)
+	$(RM) $(DISTCLEANSUFFIXES:%=$(SUBDIR)%) $(DISTCLEANSUFFIXES:%=$(SUBDIR)$(ARCH)/%) \
+            $(DISTCLEANSUFFIXES:%=$(SUBDIR)tests/%)
 
 install-lib$(NAME)-shared: $(SUBDIR)$(SLIBNAME)
 	$(Q)mkdir -p "$(SHLIBDIR)"
@@ -86,8 +73,8 @@ install-lib$(NAME)-headers: $(addprefix $(SUBDIR),$(HEADERS) $(BUILT_HEADERS))
 	$$(INSTALL) -m 644 $$^ "$(INCINSTDIR)"
 
 install-lib$(NAME)-pkgconfig: $(SUBDIR)lib$(FULLNAME).pc
-	$(Q)mkdir -p "$(LIBDIR)/pkgconfig"
-	$$(INSTALL) -m 644 $$^ "$(LIBDIR)/pkgconfig"
+	$(Q)mkdir -p "$(PKGCONFIGDIR)"
+	$$(INSTALL) -m 644 $$^ "$(PKGCONFIGDIR)"
 
 uninstall-libs::
 	-$(RM) "$(SHLIBDIR)/$(SLIBNAME_WITH_MAJOR)" \
@@ -99,14 +86,13 @@ uninstall-libs::
 
 uninstall-headers::
 	$(RM) $(addprefix "$(INCINSTDIR)/",$(HEADERS) $(BUILT_HEADERS))
-	$(RM) "$(LIBDIR)/pkgconfig/lib$(FULLNAME).pc"
+	$(RM) "$(PKGCONFIGDIR)/lib$(FULLNAME).pc"
 	-rmdir "$(INCINSTDIR)"
 endef
 
 $(eval $(RULES))
 
-$(EXAMPLES) $(TOOLS): $(DEP_LIBS) $(SUBDIR)$($(CONFIG_SHARED:yes=S)LIBNAME)
-$(TESTPROGS):         $(DEP_LIBS) $(SUBDIR)$(LIBNAME)
+$(TOOLS):     $(DEP_LIBS) $(SUBDIR)$($(CONFIG_SHARED:yes=S)LIBNAME)
+$(TESTPROGS): $(DEP_LIBS) $(SUBDIR)$(LIBNAME)
 
-examples: $(EXAMPLES)
 testprogs: $(TESTPROGS)

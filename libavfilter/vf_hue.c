@@ -73,6 +73,7 @@ typedef struct {
     AVExpr   *brightness_pexpr;
     int      hsub;
     int      vsub;
+    int is_first;
     int32_t hue_sin;
     int32_t hue_cos;
     double   var_values[VAR_NB];
@@ -104,8 +105,8 @@ static inline void compute_sin_and_cos(HueContext *hue)
      * the saturation.
      * This will be useful in the apply_lut function.
      */
-    hue->hue_sin = rint(sin(hue->hue) * (1 << 16) * hue->saturation);
-    hue->hue_cos = rint(cos(hue->hue) * (1 << 16) * hue->saturation);
+    hue->hue_sin = lrint(sin(hue->hue) * (1 << 16) * hue->saturation);
+    hue->hue_cos = lrint(cos(hue->hue) * (1 << 16) * hue->saturation);
 }
 
 static inline void create_luma_lut(HueContext *h)
@@ -143,8 +144,8 @@ static inline void create_chrominance_lut(HueContext *h, const int32_t c,
             new_v = ((s * u) + (c * v) + (1 << 15) + (128 << 16)) >> 16;
 
             /* Prevent a potential overflow */
-            h->lut_u[i][j] = av_clip_uint8_c(new_u);
-            h->lut_v[i][j] = av_clip_uint8_c(new_v);
+            h->lut_u[i][j] = av_clip_uint8(new_u);
+            h->lut_v[i][j] = av_clip_uint8(new_v);
         }
     }
 }
@@ -207,6 +208,7 @@ static av_cold int init(AVFilterContext *ctx)
            "H_expr:%s h_deg_expr:%s s_expr:%s b_expr:%s\n",
            hue->hue_expr, hue->hue_deg_expr, hue->saturation_expr, hue->brightness_expr);
     compute_sin_and_cos(hue);
+    hue->is_first = 1;
 
     return 0;
 }
@@ -231,10 +233,10 @@ static int query_formats(AVFilterContext *ctx)
         AV_PIX_FMT_YUVA420P,
         AV_PIX_FMT_NONE
     };
-
-    ff_set_common_formats(ctx, ff_make_format_list(pix_fmts));
-
-    return 0;
+    AVFilterFormats *fmts_list = ff_make_format_list(pix_fmts);
+    if (!fmts_list)
+        return AVERROR(ENOMEM);
+    return ff_set_common_formats(ctx, fmts_list);
 }
 
 static int config_props(AVFilterLink *inlink)
@@ -316,7 +318,7 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *inpic)
         av_frame_copy_props(outpic, inpic);
     }
 
-    hue->var_values[VAR_N]   = inlink->frame_count;
+    hue->var_values[VAR_N]   = inlink->frame_count_out;
     hue->var_values[VAR_T]   = TS2T(inpic->pts, inlink->time_base);
     hue->var_values[VAR_PTS] = TS2D(inpic->pts);
 
@@ -351,15 +353,15 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *inpic)
     }
 
     av_log(inlink->dst, AV_LOG_DEBUG,
-           "H:%0.1f*PI h:%0.1f s:%0.f b:%0.f t:%0.1f n:%d\n",
+           "H:%0.1f*PI h:%0.1f s:%0.1f b:%0.f t:%0.1f n:%d\n",
            hue->hue/M_PI, hue->hue_deg, hue->saturation, hue->brightness,
            hue->var_values[VAR_T], (int)hue->var_values[VAR_N]);
 
     compute_sin_and_cos(hue);
-    if (old_hue_sin != hue->hue_sin || old_hue_cos != hue->hue_cos)
+    if (hue->is_first || (old_hue_sin != hue->hue_sin || old_hue_cos != hue->hue_cos))
         create_chrominance_lut(hue, hue->hue_cos, hue->hue_sin);
 
-    if (old_brightness != hue->brightness && hue->brightness)
+    if (hue->is_first || (old_brightness != hue->brightness && hue->brightness))
         create_luma_lut(hue);
 
     if (!direct) {
@@ -375,14 +377,16 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *inpic)
 
     apply_lut(hue, outpic->data[1], outpic->data[2], outpic->linesize[1],
               inpic->data[1],  inpic->data[2],  inpic->linesize[1],
-              FF_CEIL_RSHIFT(inlink->w, hue->hsub),
-              FF_CEIL_RSHIFT(inlink->h, hue->vsub));
+              AV_CEIL_RSHIFT(inlink->w, hue->hsub),
+              AV_CEIL_RSHIFT(inlink->h, hue->vsub));
     if (hue->brightness)
         apply_luma_lut(hue, outpic->data[0], outpic->linesize[0],
                        inpic->data[0], inpic->linesize[0], inlink->w, inlink->h);
 
     if (!direct)
         av_frame_free(&inpic);
+
+    hue->is_first = 0;
     return ff_filter_frame(outlink, outpic);
 }
 

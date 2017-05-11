@@ -26,8 +26,8 @@
 
 #include "avcodec.h"
 #include "bytestream.h"
-#include "dsputil.h"
 #include "internal.h"
+#include "mathops.h"
 #include "mss34dsp.h"
 
 #define HEADER_SIZE 27
@@ -91,7 +91,7 @@ typedef struct ImageBlockCoder {
 
 typedef struct DCTBlockCoder {
     int      *prev_dc;
-    int      prev_dc_stride;
+    ptrdiff_t prev_dc_stride;
     int      prev_dc_height;
     int      quality;
     uint16_t qmat[64];
@@ -450,7 +450,7 @@ static int decode_coeff(RangeCoder *c, Model *m)
 }
 
 static void decode_fill_block(RangeCoder *c, FillBlockCoder *fc,
-                              uint8_t *dst, int stride, int block_size)
+                              uint8_t *dst, ptrdiff_t stride, int block_size)
 {
     int i;
 
@@ -461,7 +461,7 @@ static void decode_fill_block(RangeCoder *c, FillBlockCoder *fc,
 }
 
 static void decode_image_block(RangeCoder *c, ImageBlockCoder *ic,
-                               uint8_t *dst, int stride, int block_size)
+                               uint8_t *dst, ptrdiff_t stride, int block_size)
 {
     int i, j;
     int vec_size;
@@ -557,7 +557,7 @@ static int decode_dct(RangeCoder *c, DCTBlockCoder *bc, int *block,
 }
 
 static void decode_dct_block(RangeCoder *c, DCTBlockCoder *bc,
-                             uint8_t *dst, int stride, int block_size,
+                             uint8_t *dst, ptrdiff_t stride, int block_size,
                              int *block, int mb_x, int mb_y)
 {
     int i, j;
@@ -580,8 +580,8 @@ static void decode_dct_block(RangeCoder *c, DCTBlockCoder *bc,
 }
 
 static void decode_haar_block(RangeCoder *c, HaarBlockCoder *hc,
-                              uint8_t *dst, int stride, int block_size,
-                              int *block)
+                              uint8_t *dst, ptrdiff_t stride,
+                              int block_size, int *block)
 {
     const int hsize = block_size >> 1;
     int A, B, C, D, t1, t2, t3, t4;
@@ -803,15 +803,24 @@ static int mss3_decode_frame(AVCodecContext *avctx, void *data, int *got_frame,
     return buf_size;
 }
 
+static av_cold int mss3_decode_end(AVCodecContext *avctx)
+{
+    MSS3Context * const c = avctx->priv_data;
+    int i;
+
+    av_frame_free(&c->pic);
+    for (i = 0; i < 3; i++)
+        av_freep(&c->dct_coder[i].prev_dc);
+
+    return 0;
+}
+
 static av_cold int mss3_decode_init(AVCodecContext *avctx)
 {
     MSS3Context * const c = avctx->priv_data;
     int i;
 
     c->avctx = avctx;
-    c->pic = av_frame_alloc();
-    if (!c->pic)
-        return AVERROR(ENOMEM);
 
     if ((avctx->width & 0xF) || (avctx->height & 0xF)) {
         av_log(avctx, AV_LOG_ERROR,
@@ -838,21 +847,15 @@ static av_cold int mss3_decode_init(AVCodecContext *avctx)
         }
     }
 
+    c->pic = av_frame_alloc();
+    if (!c->pic) {
+        mss3_decode_end(avctx);
+        return AVERROR(ENOMEM);
+    }
+
     avctx->pix_fmt     = AV_PIX_FMT_YUV420P;
 
     init_coders(c);
-
-    return 0;
-}
-
-static av_cold int mss3_decode_end(AVCodecContext *avctx)
-{
-    MSS3Context * const c = avctx->priv_data;
-    int i;
-
-    av_frame_free(&c->pic);
-    for (i = 0; i < 3; i++)
-        av_freep(&c->dct_coder[i].prev_dc);
 
     return 0;
 }
@@ -866,5 +869,5 @@ AVCodec ff_msa1_decoder = {
     .init           = mss3_decode_init,
     .close          = mss3_decode_end,
     .decode         = mss3_decode_frame,
-    .capabilities   = CODEC_CAP_DR1,
+    .capabilities   = AV_CODEC_CAP_DR1,
 };

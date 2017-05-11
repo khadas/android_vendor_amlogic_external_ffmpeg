@@ -24,10 +24,13 @@
 #include "avassert.h"
 #include "common.h"
 #include "imgutils.h"
+#include "imgutils_internal.h"
 #include "internal.h"
 #include "intreadwrite.h"
 #include "log.h"
+#include "mathematics.h"
 #include "pixdesc.h"
+#include "rational.h"
 
 void av_image_fill_max_pixsteps(int max_pixsteps[4], int max_pixstep_comps[4],
                                 const AVPixFmtDescriptor *pixdesc)
@@ -39,8 +42,8 @@ void av_image_fill_max_pixsteps(int max_pixsteps[4], int max_pixstep_comps[4],
 
     for (i = 0; i < 4; i++) {
         const AVComponentDescriptor *comp = &(pixdesc->comp[i]);
-        if ((comp->step_minus1+1) > max_pixsteps[comp->plane]) {
-            max_pixsteps[comp->plane] = comp->step_minus1+1;
+        if (comp->step > max_pixsteps[comp->plane]) {
+            max_pixsteps[comp->plane] = comp->step;
             if (max_pixstep_comps)
                 max_pixstep_comps[comp->plane] = i;
         }
@@ -76,7 +79,7 @@ int av_image_get_linesize(enum AVPixelFormat pix_fmt, int width, int plane)
     int max_step     [4];       /* max pixel step for each plane */
     int max_step_comp[4];       /* the component for each plane which has the max pixel step */
 
-    if ((unsigned)pix_fmt >= AV_PIX_FMT_NB || desc->flags & AV_PIX_FMT_FLAG_HWACCEL)
+    if (!desc || desc->flags & AV_PIX_FMT_FLAG_HWACCEL)
         return AVERROR(EINVAL);
 
     av_image_fill_max_pixsteps(max_step, max_step_comp, desc);
@@ -123,7 +126,6 @@ int av_image_fill_pointers(uint8_t *data[4], enum AVPixelFormat pix_fmt, int hei
 
     if (desc->flags & AV_PIX_FMT_FLAG_PAL ||
         desc->flags & AV_PIX_FMT_FLAG_PSEUDOPAL) {
-        size[0] = (size[0] + 3) & ~3;
         data[1] = ptr + size[0]; /* palette is stored here as 256 32 bits words */
         return size[0] + 256 * 4;
     }
@@ -181,7 +183,7 @@ int avpriv_set_systematic_pal2(uint32_t pal[256], enum AVPixelFormat pix_fmt)
         default:
             return AVERROR(EINVAL);
         }
-        pal[i] = b + (g<<8) + (r<<16) + (0xFFU<<24);
+        pal[i] = b + (g << 8) + (r << 16) + (0xFFU << 24);
     }
 
     return 0;
@@ -214,8 +216,21 @@ int av_image_alloc(uint8_t *pointers[4], int linesizes[4],
         av_free(buf);
         return ret;
     }
-    if (desc->flags & AV_PIX_FMT_FLAG_PAL || desc->flags & AV_PIX_FMT_FLAG_PSEUDOPAL)
+    if (desc->flags & AV_PIX_FMT_FLAG_PAL || desc->flags & AV_PIX_FMT_FLAG_PSEUDOPAL) {
         avpriv_set_systematic_pal2((uint32_t*)pointers[1], pix_fmt);
+        if (align < 4) {
+            av_log(NULL, AV_LOG_ERROR, "Formats with a palette require a minimum alignment of 4\n");
+            return AVERROR(EINVAL);
+        }
+    }
+
+    if ((desc->flags & AV_PIX_FMT_FLAG_PAL ||
+         desc->flags & AV_PIX_FMT_FLAG_PSEUDOPAL) &&
+        pointers[1] - pointers[0] > linesizes[0] * h) {
+        /* zero-initialize the padding before the palette */
+        memset(pointers[0] + linesizes[0] * h, 0,
+               pointers[1] - pointers[0] - linesizes[0] * h);
+    }
 
     return ret;
 }
@@ -226,22 +241,72 @@ typedef struct ImgUtils {
     void *log_ctx;
 } ImgUtils;
 
-static const AVClass imgutils_class = { "IMGUTILS", av_default_item_name, NULL, LIBAVUTIL_VERSION_INT, offsetof(ImgUtils, log_offset), offsetof(ImgUtils, log_ctx) };
+static const AVClass imgutils_class = {
+    .class_name = "IMGUTILS",
+    .item_name  = av_default_item_name,
+    .version    = LIBAVUTIL_VERSION_INT,
+    .log_level_offset_offset   = offsetof(ImgUtils, log_offset),
+    .parent_log_context_offset = offsetof(ImgUtils, log_ctx),
+};
+
+int av_image_check_size2(unsigned int w, unsigned int h, int64_t max_pixels, enum AVPixelFormat pix_fmt, int log_offset, void *log_ctx)
+{
+    ImgUtils imgutils = {
+        .class      = &imgutils_class,
+        .log_offset = log_offset,
+        .log_ctx    = log_ctx,
+    };
+    int64_t stride = av_image_get_linesize(pix_fmt, w, 0);
+    if (stride <= 0)
+        stride = 8LL*w;
+    stride += 128*8;
+
+    if ((int)w<=0 || (int)h<=0 || stride >= INT_MAX || stride*(uint64_t)(h+128) >= INT_MAX) {
+        av_log(&imgutils, AV_LOG_ERROR, "Picture size %ux%u is invalid\n", w, h);
+        return AVERROR(EINVAL);
+    }
+
+    if (max_pixels < INT64_MAX) {
+        if (w*(int64_t)h > max_pixels) {
+            av_log(&imgutils, AV_LOG_ERROR,
+                    "Picture size %ux%u exceeds specified max pixel count %"PRId64", see the documentation if you wish to increase it\n",
+                    w, h, max_pixels);
+            return AVERROR(EINVAL);
+        }
+    }
+
+    return 0;
+}
 
 int av_image_check_size(unsigned int w, unsigned int h, int log_offset, void *log_ctx)
 {
-    ImgUtils imgutils = { &imgutils_class, log_offset, log_ctx };
+    return av_image_check_size2(w, h, INT64_MAX, AV_PIX_FMT_NONE, log_offset, log_ctx);
+}
 
-    if ((int)w>0 && (int)h>0 && (w+128)*(uint64_t)(h+128) < INT_MAX/8)
+int av_image_check_sar(unsigned int w, unsigned int h, AVRational sar)
+{
+    int64_t scaled_dim;
+
+    if (sar.den <= 0 || sar.num < 0)
+        return AVERROR(EINVAL);
+
+    if (!sar.num || sar.num == sar.den)
         return 0;
 
-    av_log(&imgutils, AV_LOG_ERROR, "Picture size %ux%u is invalid\n", w, h);
+    if (sar.num < sar.den)
+        scaled_dim = av_rescale_rnd(w, sar.num, sar.den, AV_ROUND_ZERO);
+    else
+        scaled_dim = av_rescale_rnd(h, sar.den, sar.num, AV_ROUND_ZERO);
+
+    if (scaled_dim > 0)
+        return 0;
+
     return AVERROR(EINVAL);
 }
 
-void av_image_copy_plane(uint8_t       *dst, int dst_linesize,
-                         const uint8_t *src, int src_linesize,
-                         int bytewidth, int height)
+static void image_copy_plane(uint8_t       *dst, ptrdiff_t dst_linesize,
+                             const uint8_t *src, ptrdiff_t src_linesize,
+                             ptrdiff_t bytewidth, int height)
 {
     if (!dst || !src)
         return;
@@ -254,9 +319,33 @@ void av_image_copy_plane(uint8_t       *dst, int dst_linesize,
     }
 }
 
-void av_image_copy(uint8_t *dst_data[4], int dst_linesizes[4],
-                   const uint8_t *src_data[4], const int src_linesizes[4],
-                   enum AVPixelFormat pix_fmt, int width, int height)
+static void image_copy_plane_uc_from(uint8_t       *dst, ptrdiff_t dst_linesize,
+                                     const uint8_t *src, ptrdiff_t src_linesize,
+                                     ptrdiff_t bytewidth, int height)
+{
+    int ret = -1;
+
+#if ARCH_X86
+    ret = ff_image_copy_plane_uc_from_x86(dst, dst_linesize, src, src_linesize,
+                                          bytewidth, height);
+#endif
+
+    if (ret < 0)
+        image_copy_plane(dst, dst_linesize, src, src_linesize, bytewidth, height);
+}
+
+void av_image_copy_plane(uint8_t       *dst, int dst_linesize,
+                         const uint8_t *src, int src_linesize,
+                         int bytewidth, int height)
+{
+    image_copy_plane(dst, dst_linesize, src, src_linesize, bytewidth, height);
+}
+
+static void image_copy(uint8_t *dst_data[4], const ptrdiff_t dst_linesizes[4],
+                       const uint8_t *src_data[4], const ptrdiff_t src_linesizes[4],
+                       enum AVPixelFormat pix_fmt, int width, int height,
+                       void (*copy_plane)(uint8_t *, ptrdiff_t, const uint8_t *,
+                                          ptrdiff_t, ptrdiff_t, int))
 {
     const AVPixFmtDescriptor *desc = av_pix_fmt_desc_get(pix_fmt);
 
@@ -265,9 +354,9 @@ void av_image_copy(uint8_t *dst_data[4], int dst_linesizes[4],
 
     if (desc->flags & AV_PIX_FMT_FLAG_PAL ||
         desc->flags & AV_PIX_FMT_FLAG_PSEUDOPAL) {
-        av_image_copy_plane(dst_data[0], dst_linesizes[0],
-                            src_data[0], src_linesizes[0],
-                            width, height);
+        copy_plane(dst_data[0], dst_linesizes[0],
+                   src_data[0], src_linesizes[0],
+                   width, height);
         /* copy the palette */
         memcpy(dst_data[1], src_data[1], 4*256);
     } else {
@@ -278,74 +367,109 @@ void av_image_copy(uint8_t *dst_data[4], int dst_linesizes[4],
 
         for (i = 0; i < planes_nb; i++) {
             int h = height;
-            int bwidth = av_image_get_linesize(pix_fmt, width, i);
+            ptrdiff_t bwidth = av_image_get_linesize(pix_fmt, width, i);
             if (bwidth < 0) {
                 av_log(NULL, AV_LOG_ERROR, "av_image_get_linesize failed\n");
                 return;
             }
             if (i == 1 || i == 2) {
-                h = FF_CEIL_RSHIFT(height, desc->log2_chroma_h);
+                h = AV_CEIL_RSHIFT(height, desc->log2_chroma_h);
             }
-            av_image_copy_plane(dst_data[i], dst_linesizes[i],
-                                src_data[i], src_linesizes[i],
-                                bwidth, h);
+            copy_plane(dst_data[i], dst_linesizes[i],
+                       src_data[i], src_linesizes[i],
+                       bwidth, h);
         }
     }
 }
 
+void av_image_copy(uint8_t *dst_data[4], int dst_linesizes[4],
+                   const uint8_t *src_data[4], const int src_linesizes[4],
+                   enum AVPixelFormat pix_fmt, int width, int height)
+{
+    ptrdiff_t dst_linesizes1[4], src_linesizes1[4];
+    int i;
+
+    for (i = 0; i < 4; i++) {
+        dst_linesizes1[i] = dst_linesizes[i];
+        src_linesizes1[i] = src_linesizes[i];
+    }
+
+    image_copy(dst_data, dst_linesizes1, src_data, src_linesizes1, pix_fmt,
+               width, height, image_copy_plane);
+}
+
+void av_image_copy_uc_from(uint8_t *dst_data[4], const ptrdiff_t dst_linesizes[4],
+                           const uint8_t *src_data[4], const ptrdiff_t src_linesizes[4],
+                           enum AVPixelFormat pix_fmt, int width, int height)
+{
+    image_copy(dst_data, dst_linesizes, src_data, src_linesizes, pix_fmt,
+               width, height, image_copy_plane_uc_from);
+}
+
 int av_image_fill_arrays(uint8_t *dst_data[4], int dst_linesize[4],
-                         const uint8_t *src,
-                         enum AVPixelFormat pix_fmt, int width, int height, int align)
+                         const uint8_t *src, enum AVPixelFormat pix_fmt,
+                         int width, int height, int align)
 {
     int ret, i;
 
-    if ((ret = av_image_check_size(width, height, 0, NULL)) < 0)
+    ret = av_image_check_size(width, height, 0, NULL);
+    if (ret < 0)
         return ret;
 
-    if ((ret = av_image_fill_linesizes(dst_linesize, pix_fmt, width)) < 0)
+    ret = av_image_fill_linesizes(dst_linesize, pix_fmt, width);
+    if (ret < 0)
         return ret;
 
     for (i = 0; i < 4; i++)
         dst_linesize[i] = FFALIGN(dst_linesize[i], align);
 
-    if ((ret = av_image_fill_pointers(dst_data, pix_fmt, width, NULL, dst_linesize)) < 0)
-        return ret;
-
     return av_image_fill_pointers(dst_data, pix_fmt, height, (uint8_t *)src, dst_linesize);
 }
 
-int av_image_get_buffer_size(enum AVPixelFormat pix_fmt, int width, int height, int align)
+int av_image_get_buffer_size(enum AVPixelFormat pix_fmt,
+                             int width, int height, int align)
 {
-    const AVPixFmtDescriptor *desc = av_pix_fmt_desc_get(pix_fmt);
     uint8_t *data[4];
     int linesize[4];
-
+    int ret;
+    const AVPixFmtDescriptor *desc = av_pix_fmt_desc_get(pix_fmt);
     if (!desc)
         return AVERROR(EINVAL);
-    if (av_image_check_size(width, height, 0, NULL) < 0)
-        return AVERROR(EINVAL);
+
+    ret = av_image_check_size(width, height, 0, NULL);
+    if (ret < 0)
+        return ret;
+
+    // do not include palette for these pseudo-paletted formats
     if (desc->flags & AV_PIX_FMT_FLAG_PSEUDOPAL)
-        // do not include palette for these pseudo-paletted formats
-        return width * height;
-    return av_image_fill_arrays(data, linesize, NULL, pix_fmt, width, height, align);
+        return FFALIGN(width, align) * height;
+
+    return av_image_fill_arrays(data, linesize, NULL, pix_fmt,
+                                width, height, align);
 }
 
 int av_image_copy_to_buffer(uint8_t *dst, int dst_size,
-                            const uint8_t * const src_data[4], const int src_linesize[4],
-                            enum AVPixelFormat pix_fmt, int width, int height, int align)
+                            const uint8_t * const src_data[4],
+                            const int src_linesize[4],
+                            enum AVPixelFormat pix_fmt,
+                            int width, int height, int align)
 {
     int i, j, nb_planes = 0, linesize[4];
-    const AVPixFmtDescriptor *desc = av_pix_fmt_desc_get(pix_fmt);
     int size = av_image_get_buffer_size(pix_fmt, width, height, align);
+    const AVPixFmtDescriptor *desc = av_pix_fmt_desc_get(pix_fmt);
+    int ret;
 
-    if (size > dst_size || size < 0)
+    if (size > dst_size || size < 0 || !desc)
         return AVERROR(EINVAL);
 
     for (i = 0; i < desc->nb_components; i++)
         nb_planes = FFMAX(desc->comp[i].plane, nb_planes);
+
     nb_planes++;
 
-    av_image_fill_linesizes(linesize, pix_fmt, width);
+    ret = av_image_fill_linesizes(linesize, pix_fmt, width);
+    av_assert0(ret >= 0); // was checked previously
+
     for (i = 0; i < nb_planes; i++) {
         int h, shift = (i == 1 || i == 2) ? desc->log2_chroma_h : 0;
         const uint8_t *src = src_data[i];
@@ -359,7 +483,8 @@ int av_image_copy_to_buffer(uint8_t *dst, int dst_size,
     }
 
     if (desc->flags & AV_PIX_FMT_FLAG_PAL) {
-        uint32_t *d32 = (uint32_t *)(((size_t)dst + 3) & ~3);
+        uint32_t *d32 = (uint32_t *)dst;
+
         for (i = 0; i<256; i++)
             AV_WL32(d32 + i, AV_RN32(src_data[1] + 4*i));
     }

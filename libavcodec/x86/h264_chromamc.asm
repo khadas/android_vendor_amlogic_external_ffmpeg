@@ -1,5 +1,5 @@
 ;******************************************************************************
-;* MMX/SSSE3-optimized functions for H264 chroma MC
+;* MMX/SSSE3-optimized functions for H.264 chroma MC
 ;* Copyright (c) 2005 Zoltan Hidvegi <hzoli -a- hzoli -d- com>,
 ;*               2005-2008 Loren Merritt
 ;*
@@ -103,12 +103,10 @@ SECTION .text
 %else
 %define extra_regs 0
 %endif ; rv40
-; put/avg_h264_chroma_mc8_*(uint8_t *dst /*align 8*/, uint8_t *src /*align 1*/,
-;                           int stride, int h, int mx, int my)
+; void ff_put/avg_h264_chroma_mc8_*(uint8_t *dst /* align 8 */,
+;                                   uint8_t *src /* align 1 */,
+;                                   ptrdiff_t stride, int h, int mx, int my)
 cglobal %1_%2_chroma_mc8%3, 6, 7 + extra_regs, 0
-%if ARCH_X86_64
-    movsxd        r2, r2d
-%endif
     mov          r6d, r5d
     or           r6d, r4d
     jne .at_least_one_non_zero
@@ -290,9 +288,6 @@ cglobal %1_%2_chroma_mc8%3, 6, 7 + extra_regs, 0
 %endif ; PIC
 %endif ; rv40
 cglobal %1_%2_chroma_mc4, 6, 6 + extra_regs, 0
-%if ARCH_X86_64
-    movsxd        r2, r2d
-%endif
     pxor          m7, m7
     movd          m2, r4d         ; x
     movd          m3, r5d         ; y
@@ -375,10 +370,6 @@ cglobal %1_%2_chroma_mc4, 6, 6 + extra_regs, 0
 
 %macro chroma_mc2_mmx_func 2
 cglobal %1_%2_chroma_mc2, 6, 7, 0
-%if ARCH_X86_64
-    movsxd        r2, r2d
-%endif
-
     mov          r6d, r4d
     shl          r4d, 16
     sub          r4d, r6d
@@ -464,9 +455,6 @@ chroma_mc4_mmx_func avg, rv40
 
 %macro chroma_mc8_ssse3_func 2-3
 cglobal %1_%2_chroma_mc8%3, 6, 7, 8
-%if ARCH_X86_64
-    movsxd        r2, r2d
-%endif
     mov          r6d, r5d
     or           r6d, r4d
     jne .at_least_one_non_zero
@@ -612,9 +600,6 @@ cglobal %1_%2_chroma_mc8%3, 6, 7, 8
 
 %macro chroma_mc4_ssse3_func 2
 cglobal %1_%2_chroma_mc4, 6, 7, 0
-%if ARCH_X86_64
-    movsxd        r2, r2d
-%endif
     mov           r6, r4
     shl          r4d, 8
     sub          r4d, r6d

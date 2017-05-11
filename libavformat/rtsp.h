@@ -70,6 +70,7 @@ enum RTSPControlTransport {
 };
 
 #define RTSP_DEFAULT_PORT   554
+#define RTSPS_DEFAULT_PORT  322
 #define RTSP_MAX_TRANSPORTS 8
 #define RTSP_TCP_MAX_PACKET_SIZE 1472
 #define RTSP_DEFAULT_NB_AUDIO_CHANNELS 1
@@ -404,6 +405,9 @@ typedef struct RTSPState {
      * User-Agent string
      */
     char *user_agent;
+
+    char default_lang[4];
+    int buffer_size;
 } RTSPState;
 
 #define RTSP_FLAG_FILTER_SRC  0x1    /**< Filter incoming UDP packets -
@@ -413,6 +417,7 @@ typedef struct RTSPState {
 #define RTSP_FLAG_CUSTOM_IO   0x4    /**< Do all IO via the AVIOContext. */
 #define RTSP_FLAG_RTCP_TO_SOURCE 0x8 /**< Send RTCP packets to the source
                                           address of received packets. */
+#define RTSP_FLAG_PREFER_TCP  0x10   /**< Try RTP via TCP first if possible. */
 
 typedef struct RTSPSource {
     char addr[128]; /**< Source-specific multicast include source IP address (from SDP content) */
@@ -461,11 +466,15 @@ typedef struct RTSPStream {
     /** Enable sending RTCP feedback messages according to RFC 4585 */
     int feedback;
 
+    /** SSRC for this stream, to allow identifying RTCP packets before the first RTP packet */
+    uint32_t ssrc;
+
     char crypto_suite[40];
     char crypto_params[100];
 } RTSPStream;
 
-void ff_rtsp_parse_line(RTSPMessageHeader *reply, const char *buf,
+void ff_rtsp_parse_line(AVFormatContext *s,
+                        RTSPMessageHeader *reply, const char *buf,
                         RTSPState *rt, const char *method);
 
 /**
@@ -598,6 +607,11 @@ int ff_rtsp_tcp_read_packet(AVFormatContext *s, RTSPStream **prtsp_st,
                             uint8_t *buf, int buf_size);
 
 /**
+ * Send buffered packets over TCP.
+ */
+int ff_rtsp_tcp_write_packet(AVFormatContext *s, RTSPStream *rtsp_st);
+
+/**
  * Receive one packet from the RTSPStreams set up in the AVFormatContext
  * (which should contain a RTSPState struct as priv_data).
  */
@@ -615,7 +629,7 @@ int ff_rtsp_make_setup_request(AVFormatContext *s, const char *host, int port,
  * Undo the effect of ff_rtsp_make_setup_request, close the
  * transport_priv and rtp_handle fields.
  */
-void ff_rtsp_undo_setup(AVFormatContext *s);
+void ff_rtsp_undo_setup(AVFormatContext *s, int send_packets);
 
 /**
  * Open RTSP transport context.

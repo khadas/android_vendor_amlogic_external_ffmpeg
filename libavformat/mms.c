@@ -1,7 +1,7 @@
 /*
  * MMS protocol common definitions.
  * Copyright (c) 2006,2007 Ryan Martell
- * Copyright (c) 2007 Björn Axelsson
+ * Copyright (c) 2007 BjÃ¶rn Axelsson
  * Copyright (c) 2010 Zhentan Feng <spyfeng at gmail dot com>
  *
  * This file is part of FFmpeg.
@@ -97,13 +97,15 @@ int ff_mms_asf_header_parser(MMSContext *mms)
             flags     = AV_RL16(p + sizeof(ff_asf_guid)*3 + 24);
             stream_id = flags & 0x7F;
             //The second condition is for checking CS_PKT_STREAM_ID_REQUEST packet size,
-            //we can calcuate the packet size by stream_num.
+            //we can calculate the packet size by stream_num.
             //Please see function send_stream_selection_request().
             if (mms->stream_num < MMS_MAX_STREAMS &&
                     46 + mms->stream_num * 6 < sizeof(mms->out_buffer)) {
                 mms->streams = av_fast_realloc(mms->streams,
                                    &mms->nb_streams_allocated,
                                    (mms->stream_num + 1) * sizeof(MMSStream));
+                if (!mms->streams)
+                    return AVERROR(ENOMEM);
                 mms->streams[mms->stream_num].id = stream_id;
                 mms->stream_num++;
             } else {

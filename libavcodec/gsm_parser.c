@@ -25,6 +25,7 @@
  * Splits packets into individual blocks.
  */
 
+#include "libavutil/avassert.h"
 #include "parser.h"
 #include "gsm.h"
 
@@ -50,14 +51,12 @@ static int gsm_parse(AVCodecParserContext *s1, AVCodecContext *avctx,
             s->duration   = GSM_FRAME_SIZE;
             break;
         case AV_CODEC_ID_GSM_MS:
-            s->block_size = GSM_MS_BLOCK_SIZE;
+            s->block_size = avctx->block_align ? avctx->block_align
+                                               : GSM_MS_BLOCK_SIZE;
             s->duration   = GSM_FRAME_SIZE * 2;
             break;
         default:
-            *poutbuf      = buf;
-            *poutbuf_size = buf_size;
-            av_log(avctx, AV_LOG_ERROR, "Invalid codec_id\n");
-            return buf_size;
+            av_assert0(0);
         }
     }
 

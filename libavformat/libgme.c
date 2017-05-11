@@ -126,10 +126,10 @@ static int read_header_gme(AVFormatContext *s)
     avpriv_set_pts_info(st, 64, 1, 1000);
     if (st->duration > 0)
         st->duration = gme->info->length;
-    st->codec->codec_type  = AVMEDIA_TYPE_AUDIO;
-    st->codec->codec_id    = AV_NE(AV_CODEC_ID_PCM_S16BE, AV_CODEC_ID_PCM_S16LE);
-    st->codec->channels    = 2;
-    st->codec->sample_rate = gme->sample_rate;
+    st->codecpar->codec_type  = AVMEDIA_TYPE_AUDIO;
+    st->codecpar->codec_id    = AV_NE(AV_CODEC_ID_PCM_S16BE, AV_CODEC_ID_PCM_S16LE);
+    st->codecpar->channels    = 2;
+    st->codecpar->sample_rate = gme->sample_rate;
 
     return 0;
 }
@@ -174,7 +174,7 @@ static int probe_gme(AVProbeData *p)
     // Reads 4 bytes - returns "" if unknown format.
     if (gme_identify_header(p->buf)[0]) {
         if (p->buf_size < 16384)
-            return AVPROBE_SCORE_MAX / 4 + 1;
+            return AVPROBE_SCORE_MAX / 4 ;
         else
             return AVPROBE_SCORE_MAX / 2;
     }
