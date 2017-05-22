@@ -50,6 +50,7 @@ enum HEVCNALUnitType {
     HEVC_NAL_FD_NUT     = 38,
     HEVC_NAL_SEI_PREFIX = 39,
     HEVC_NAL_SEI_SUFFIX = 40,
+    HEVC_NAL_SEI_DV_META = 62,
 };
 
 enum HEVCSliceType {
