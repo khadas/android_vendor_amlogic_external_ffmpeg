@@ -45,6 +45,7 @@ enum {
     H264_NAL_SUB_SPS         = 15,
     H264_NAL_AUXILIARY_SLICE = 19,
     H264_NAL_SLC_EXT         = 20,
+    H264_NAL_264_DV          = 0x1c, /*0x7c & 0x1f*/
 };
 
 #endif /* AVCODEC_H264_H */

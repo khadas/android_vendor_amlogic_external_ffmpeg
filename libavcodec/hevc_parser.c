@@ -267,6 +267,14 @@ static inline int parse_nal_units(AVCodecParserContext *s, const uint8_t *buf,
         case HEVC_NAL_SEI_SUFFIX:
             ff_hevc_decode_nal_sei(h);
             break;
+        case HEVC_NAL_SEI_DV_META:
+            /*
+            sample dolbyvision nal header:
+            00 00 01 8C 7C 01 19 08
+            nal_type =(0x7C >> 1) 0x3f;
+            */
+            avctx->has_dolby_vision_meta = 1;
+            break;
         case HEVC_NAL_TRAIL_N:
         case HEVC_NAL_TRAIL_R:
         case HEVC_NAL_TSA_N:
