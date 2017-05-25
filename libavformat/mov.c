@@ -2190,6 +2190,7 @@ static int mov_finalize_stsd_codec(MOVContext *c, AVIOContext *pb,
     case AV_CODEC_ID_MP3:
         /* force type after stsd for m1a hdlr */
         st->codecpar->codec_type = AVMEDIA_TYPE_AUDIO;
+        st->need_parsing      = AVSTREAM_PARSE_FULL;
         break;
     case AV_CODEC_ID_GSM:
     case AV_CODEC_ID_ADPCM_MS:
