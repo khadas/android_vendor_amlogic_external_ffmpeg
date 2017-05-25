@@ -56,6 +56,7 @@
 #include "isom.h"
 #include "libavcodec/get_bits.h"
 #include "id3v1.h"
+#include "id3v2.h"
 #include "mov_chan.h"
 #include "replaygain.h"
 
@@ -5161,6 +5162,35 @@ static int mov_read_dfla(MOVContext *c, AVIOContext *pb, MOVAtom atom)
     return 0;
 }
 
+static void mov_id32_date2year(AVDictionary **m)
+{
+    AVDictionaryEntry *t = NULL;
+    if (t = av_dict_get(*m, "date", t, AV_DICT_MATCH_CASE)) {
+        av_dict_set(m, "year", t->value, 0);
+        av_log(NULL, AV_LOG_INFO, "[%s:%d] date:%s\n", __FUNCTION__, __LINE__, t->value);
+    }
+}
+static int mov_read_id32(MOVContext *c, AVIOContext *pb, MOVAtom atom)
+{
+    int ret = 0;
+    ID3v2ExtraMeta *id3v2_extra_meta = NULL;
+    int len = atom.size;
+    avio_skip(pb, 6); // version+flags+pad+language
+    len -=6 ;
+    ff_id3v2_read(c->fc, ID3v2_DEFAULT_MAGIC, &id3v2_extra_meta, len);
+
+    if (id3v2_extra_meta) {
+        if ((ret = ff_id3v2_parse_apic(c->fc, &id3v2_extra_meta)) < 0) {
+            ff_id3v2_free_extra_meta(&id3v2_extra_meta);
+            return ret;
+        }
+        ff_id3v2_free_extra_meta(&id3v2_extra_meta);
+    }
+
+    mov_id32_date2year(&c->fc->metadata);
+
+    return 0;
+}
 static int mov_seek_auxiliary_info(MOVContext *c, MOVStreamContext *sc, int64_t index)
 {
     size_t auxiliary_info_seek_offset = 0;
@@ -5347,6 +5377,7 @@ static const MOVParseTableEntry mov_default_parse_table[] = {
 { MKTAG('d','f','L','a'), mov_read_dfla },
 { MKTAG('s','t','3','d'), mov_read_st3d }, /* stereoscopic 3D video box */
 { MKTAG('s','v','3','d'), mov_read_sv3d }, /* spherical video box */
+{ MKTAG('I','D','3','2'), mov_read_id32 }, /* id32 video box */
 { 0, NULL }
 };
 
