@@ -255,9 +255,16 @@ static int decode_str(AVFormatContext *s, AVIOContext *pb, int encoding,
 
     switch (encoding) {
     case ID3v2_ENCODING_ISO8859:
+#if 0
         while (left && ch) {
             ch = avio_r8(pb);
             PUT_UTF8(ch, tmp, avio_w8(dynbuf, tmp);)
+            left--;
+        }
+#endif
+        while (left && ch) {
+            ch = avio_r8(pb);
+            avio_w8(dynbuf, ch);
             left--;
         }
         break;
@@ -280,6 +287,32 @@ static int decode_str(AVFormatContext *s, AVIOContext *pb, int encoding,
             *dst = NULL;
             *maxread = left;
             return AVERROR_INVALIDDATA;
+        }
+
+        int i = 0;
+        int len = left / 2;
+        int tlen = left;
+        int eightBit = 1;
+        uint16_t *framedata = malloc(left+1);
+        memset(framedata, 0, left+1);
+        for (i = 0; i < len; i++) {
+            framedata[i] = get(pb);
+            left -= 2;
+            if (framedata[i] > 0xff) {
+                eightBit = 0;
+            }
+        }
+        if (eightBit) {
+            for (i = 0; i < len; i++) {
+                avio_w8(dynbuf, framedata[i]);
+            }
+            free(framedata);
+            break;
+        }
+        else {
+            free(framedata);
+            left = tlen - left;
+            avio_seek(pb, -left, SEEK_CUR);
         }
         // fall-through
 
