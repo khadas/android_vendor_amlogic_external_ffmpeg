@@ -1393,7 +1393,10 @@ FFMPEG_LIBAVFORMAT_SRC_FILES := \
     libavformat/yop.c \
     libavformat/yuv4mpegdec.c \
     libavformat/yuv4mpegenc.c \
-
+    libavformat/avisynth.c \
+    libavformat/dtsdec.c \
+    libavformat/dtshddec.c \
+    libavformat/ac3dec.c \
 
 ##### libswscalse
 
