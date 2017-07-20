@@ -455,6 +455,9 @@ int ff_h264_decode_extradata(const uint8_t *data, int size, H264ParamSets *ps,
             nalsize = AV_RB16(p) + 2;
             if (nalsize > size - (p - data))
                 return AVERROR_INVALIDDATA;
+            if (nalsize < 0)
+                return AVERROR_INVALIDDATA;
+
             ret = decode_extradata_ps_mp4(p, nalsize, ps, err_recognition, logctx);
             if (ret < 0) {
                 av_log(logctx, AV_LOG_ERROR,
@@ -468,6 +471,8 @@ int ff_h264_decode_extradata(const uint8_t *data, int size, H264ParamSets *ps,
         for (i = 0; i < cnt; i++) {
             nalsize = AV_RB16(p) + 2;
             if (nalsize > size - (p - data))
+                return AVERROR_INVALIDDATA;
+            if (nalsize < 0)
                 return AVERROR_INVALIDDATA;
             ret = decode_extradata_ps_mp4(p, nalsize, ps, err_recognition, logctx);
             if (ret < 0) {
