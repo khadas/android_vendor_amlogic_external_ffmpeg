@@ -1505,6 +1505,8 @@ LOCAL_SRC_FILES_arm64 := \
     $(FFMPEG_LIBRESAMPLE_SRC_FILES_armv8-a) \
     $(FFMPEG_LIBSWSCALE_SRC_FILES_armv8-a) \
 
-LOCAL_SHARED_LIBRARIES := libutils liblog libdl
+LOCAL_C_INCLUDES += external/zlib
+
+LOCAL_SHARED_LIBRARIES := libutils liblog libdl libz
 
 include $(BUILD_SHARED_LIBRARY)
