@@ -347,6 +347,9 @@ static inline int parse_nal_units(AVCodecParserContext *s,
                 /* key frame, since recovery_frame_cnt is set */
                 s->key_frame = 1;
             }
+            /* set key_frame for I frame*/
+            if (s->pict_type == AV_PICTURE_TYPE_I)
+                s->key_frame = 1;
             pps_id = get_ue_golomb(&nal.gb);
             if (pps_id >= MAX_PPS_COUNT) {
                 av_log(avctx, AV_LOG_ERROR,
