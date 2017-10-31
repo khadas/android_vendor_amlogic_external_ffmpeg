@@ -3637,6 +3637,7 @@ typedef struct AVCodecContext {
      */
     int hwaccel_flags;
     int has_dolby_vision_meta;
+    int has_dolby_vision_el;
 } AVCodecContext;
 
 AVRational av_codec_get_pkt_timebase         (const AVCodecContext *avctx);
