@@ -768,6 +768,19 @@ FF_ENABLE_DEPRECATION_WARNINGS
                 avctx->codec_tag = MKTAG('M', 'V', 'C', ' ');
             }
             break;
+        case H264_NAL_264_DV_META:
+            /*00 00 00 01 7c 01 19  08
+            nal type = 0x7c & 0x1f;
+            any conflict?
+            */
+            avctx->has_dolby_vision_meta = 1;
+            break;
+        case H264_NAL_264_DV_EL:
+            /*00 00 00 01 7e
+            nal type = 0x7e & 0x1f;
+            any conflict?
+            */
+            avctx->has_dolby_vision_el = 1;
         default:
             av_log(avctx, AV_LOG_DEBUG, "Unknown NAL code: %d (%d bits)\n",
                    nal->type, nal->size_bits);
