@@ -2650,6 +2650,64 @@ static int parse_pcr(int64_t *ppcr_high, int *ppcr_low, const uint8_t *packet)
     return 0;
 }
 
+static void check_ac3_dts(AVFormatContext * s)
+{
+
+    MpegTSContext *ts = s->priv_data;
+    int s_index;
+    const uint8_t *data;
+    uint8_t packet[TS_PACKET_SIZE];
+    for (s_index = 0; s_index < s->nb_streams; s_index++) {
+        int codec_id = s->streams[s_index]->codecpar->codec_id;
+        int c_pid = s->streams[s_index]->id;
+        if (codec_id == AV_CODEC_ID_AC3) {
+            int packet_num, ret;
+            int pes_header_pos, es_header_pos;
+            packet_num = 0;
+            for (;;) {
+                packet_num++;
+                if (packet_num >= 180000) {
+                    break;
+                }
+                ret = read_packet(s, packet, ts->raw_packet_size,&data);
+                if (ret != 0) {
+                    return;
+                }
+                if ((c_pid != (AV_RB16(data + 1) & 0x1fff)) && (1 != (data[1] & 0x40))) {  //pid equal and must have pes/es header
+                    continue;
+                }
+                //seek to the pes header
+                for (pes_header_pos = 0; pes_header_pos < ts->raw_packet_size - 3; pes_header_pos++) {
+                    if (data[pes_header_pos] == 0x00 && data[pes_header_pos + 1] == 0x00 && data[pes_header_pos + 2] == 0x01) {
+                        break;
+                    }
+                }
+                if (pes_header_pos == ts->raw_packet_size - 3) {
+                    continue;
+                }
+                //we found the pes header and parse
+                es_header_pos = data[pes_header_pos + 8] + 9 + pes_header_pos; //pes header size
+                if (data[es_header_pos] == 0x1F && data[es_header_pos + 1] == 0xFF && data[es_header_pos + 2] == 0xE8 && data[es_header_pos] == 0x00) {
+                    s->streams[s_index]->codecpar->codec_id = AV_CODEC_ID_DTS;
+                }
+                if (data[es_header_pos] == 0xFF && data[es_header_pos + 1] == 0x1F && data[es_header_pos + 2] == 0x00 && data[es_header_pos + 3] == 0xE8) {
+                    s->streams[s_index]->codecpar->codec_id = AV_CODEC_ID_DTS;
+                }
+                if (data[es_header_pos] == 0x7F && data[es_header_pos + 1] == 0xFE && data[es_header_pos + 2] == 0x80 && data[es_header_pos + 3] == 0x01) {
+                    s->streams[s_index]->codecpar->codec_id = AV_CODEC_ID_DTS;
+                }
+                if (data[es_header_pos] == 0xFE && data[es_header_pos + 1] == 0x7F && data[es_header_pos + 2] == 0x01 && data[es_header_pos + 3] == 0x80) {
+                    s->streams[s_index]->codecpar->codec_id = AV_CODEC_ID_DTS;
+                }
+
+                break;
+            }
+
+        }
+    }
+}
+
+
 static void seek_back(AVFormatContext *s, AVIOContext *pb, int64_t pos) {
 
     /* NOTE: We attempt to seek on non-seekable files as well, as the
@@ -2760,6 +2818,7 @@ static int mpegts_read_header(AVFormatContext *s)
                 st->start_time / 1000000.0, pcrs[0] / 27e6, ts->pcr_incr);
     }
 
+    check_ac3_dts(s);
     seek_back(s, pb, pos);
     return 0;
 }
