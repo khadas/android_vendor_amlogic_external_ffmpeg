@@ -3383,6 +3383,47 @@ void ff_rfps_calculate(AVFormatContext *ic)
     }
 }
 
+
+static int has_decode_delay_been_guessed_ext(AVStream *st)
+{
+    /* trying decode 4k would cost huge memory, invoke oom-killer */
+    return (st->codec->codec_id != AV_CODEC_ID_H264 && st->codec->codec_id != AV_CODEC_ID_HEVC) ||
+           (st->codec_info_nb_frames >= 6 + st->codec->has_b_frames) ||
+           (st->codec->width*st->codec->height >= 3840*2160);
+}
+
+static int has_codec_parameters_ex(AVCodecContext *enc)
+{
+    int val;
+    switch (enc->codec_type) {
+        case AVMEDIA_TYPE_AUDIO:
+
+            if (enc->codec_id == AV_CODEC_ID_AC3) {
+                val = enc->sample_rate && enc->channels;
+            } else {
+                val = enc->sample_rate && enc->channels && enc->sample_fmt != AV_SAMPLE_FMT_NONE;
+            }
+            if (!enc->frame_size &&
+                (enc->codec_id == AV_CODEC_ID_VORBIS ||
+                 enc->codec_id == AV_CODEC_ID_AAC ||
+                 enc->codec_id == AV_CODEC_ID_MP1 ||
+                 enc->codec_id == AV_CODEC_ID_MP2 ||
+                 enc->codec_id == AV_CODEC_ID_MP3 ||
+                 enc->codec_id == AV_CODEC_ID_SPEEX ||
+                 enc->codec_id == AV_CODEC_ID_CELT)) {
+                return 0;
+            }
+            break;
+        case AVMEDIA_TYPE_VIDEO:
+            val = enc->width && enc->pix_fmt != AV_PIX_FMT_NONE;
+            break;
+        default:
+            val = 1;
+            break;
+    }
+    return enc->codec_id != AV_CODEC_ID_NONE && val != 0;
+}
+
 int avformat_find_stream_info(AVFormatContext *ic, AVDictionary **options)
 {
     int i, count = 0, ret = 0, j;
@@ -3715,8 +3756,11 @@ FF_ENABLE_DEPRECATION_WARNINGS
          * least one frame of codec data, this makes sure the codec initializes
          * the channel configuration and does not only trust the values from
          * the container. */
-        try_decode_frame(ic, st, pkt,
-                         (options && i < orig_nb_streams) ? &options[i] : NULL);
+
+         if ((st->codec->codec_id != AV_CODEC_ID_CAVS) &&
+            ( !has_decode_delay_been_guessed_ext(st) && !has_codec_parameters_ex(st->codec)))
+            try_decode_frame(ic, st, pkt,
+                             (options && i < orig_nb_streams) ? &options[i] : NULL);
 
         if (ic->flags & AVFMT_FLAG_NOBUFFER)
             av_packet_unref(pkt);
