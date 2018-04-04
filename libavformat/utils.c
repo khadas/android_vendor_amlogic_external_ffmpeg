@@ -3391,8 +3391,7 @@ void ff_rfps_calculate(AVFormatContext *ic)
 static int has_decode_delay_been_guessed_ext(AVStream *st)
 {
     /* trying decode 4k would cost huge memory, invoke oom-killer */
-    return (st->codec->codec_id != AV_CODEC_ID_H264 && st->codec->codec_id != AV_CODEC_ID_HEVC) ||
-           (st->codec_info_nb_frames >= 6 + st->codec->has_b_frames) ||
+    return (st->codec_info_nb_frames >= 6 + st->codec->has_b_frames) ||
            (st->codec->width*st->codec->height >= 3840*2160);
 }
 
@@ -3761,6 +3760,8 @@ FF_ENABLE_DEPRECATION_WARNINGS
          * the channel configuration and does not only trust the values from
          * the container. */
 
+         av_log(ic, AV_LOG_INFO, "codec_id %d, guessed %d, para_ex %d\n", st->codec->codec_id,
+                      has_decode_delay_been_guessed_ext(st), has_codec_parameters_ex(st->codec));
          if ((st->codec->codec_id != AV_CODEC_ID_CAVS) &&
             ( !has_decode_delay_been_guessed_ext(st) && !has_codec_parameters_ex(st->codec)))
             try_decode_frame(ic, st, pkt,
