@@ -1203,6 +1203,14 @@ static void compute_pkt_fields(AVFormatContext *s, AVStream *st,
     if (s->flags & AVFMT_FLAG_NOFILLIN)
         return;
 
+    if (onein_oneout && pc && pc->pict_type == AV_PICTURE_TYPE_B)
+        //FIXME Set low_delay = 0 when has_b_frames = 1
+        st->codec->has_b_frames = 1;
+
+    if (st->codecpar->codec_id == AV_CODEC_ID_MPEG2VIDEO && st->codec->has_b_frames &&
+        pkt->pts == AV_NOPTS_VALUE && pkt->dts == AV_NOPTS_VALUE)
+        onein_oneout = 0;
+
     if (st->codecpar->codec_type == AVMEDIA_TYPE_VIDEO && pkt->dts != AV_NOPTS_VALUE) {
         if (pkt->dts == pkt->pts && st->last_dts_for_order_check != AV_NOPTS_VALUE) {
             if (st->last_dts_for_order_check <= pkt->dts) {
