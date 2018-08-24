@@ -1700,6 +1700,51 @@ static int mov_read_glbl(MOVContext *c, AVIOContext *pb, MOVAtom atom)
     return 0;
 }
 
+/**
+ * This function reads atom content and puts data in extradata without tag
+ * nor size unlike mov_read_extradata.
+ */
+static int mov_read_dvcc(MOVContext *c, AVIOContext *pb, MOVAtom atom)
+{
+    AVStream *st;
+    int ret;
+    uint8_t config_data[64];
+    int i = 0;
+
+    av_log(c, AV_LOG_VERBOSE, "mov_read_dvcc:%d\n", atom.size);
+
+    if (c->fc->nb_streams < 1)
+        return 0;
+    st = c->fc->streams[c->fc->nb_streams-1];
+
+    if ((uint64_t)atom.size > (1<<30))
+        return AVERROR_INVALIDDATA;
+
+    avio_read(pb, config_data, atom.size);
+
+    if (config_data[0] != 1 || config_data[1] != 0)
+        return 0;
+
+    uint8_t profile = config_data[2] >> 1;
+    // profile == (0, 1, 9) --> AVC; profile = (2,3,4,5,6,7,8) --> HEVC;
+    if (profile > 9) {
+        av_log(c, AV_LOG_ERROR, "profile error:%d\n", profile);
+        return 0;
+    }
+
+    uint8_t level = ((config_data[2] & 0x1) << 5) | ((config_data[3] >> 3) & 0x1f);
+    av_log(c, AV_LOG_INFO, "level:%d\n", level);
+
+    st->codec->has_dolby_vision_config_box = 1;
+    st->codec->dolby_vision_profile = profile;
+    st->codec->dolby_vision_level = level;
+
+    return 0;
+}
+
+
+
+
 static int mov_read_dvc1(MOVContext *c, AVIOContext *pb, MOVAtom atom)
 {
     AVStream *st;
@@ -5378,6 +5423,10 @@ static const MOVParseTableEntry mov_default_parse_table[] = {
 { MKTAG('s','t','3','d'), mov_read_st3d }, /* stereoscopic 3D video box */
 { MKTAG('s','v','3','d'), mov_read_sv3d }, /* spherical video box */
 { MKTAG('I','D','3','2'), mov_read_id32 }, /* id32 video box */
+{ MKTAG('d','v','c','C'), mov_read_dvcc }, /* Dolby Vision configuration box*/
+{ MKTAG('d','v','v','C'), mov_read_dvcc }, /* Dolby Vision configuration box*/
+
+
 { 0, NULL }
 };
 

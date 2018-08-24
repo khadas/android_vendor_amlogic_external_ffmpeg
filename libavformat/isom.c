@@ -141,7 +141,7 @@ const AVCodecTag ff_codec_movvideo_tags[] = {
     { AV_CODEC_ID_DVVIDEO, MKTAG('A', 'V', 'd', '1') }, /* AVID DV100 */
     { AV_CODEC_ID_DVVIDEO, MKTAG('d', 'v', 'h', 'q') }, /* DVCPRO HD 720p50 */
     { AV_CODEC_ID_DVVIDEO, MKTAG('d', 'v', 'h', 'p') }, /* DVCPRO HD 720p60 */
-    { AV_CODEC_ID_DVVIDEO, MKTAG('d', 'v', 'h', '1') },
+    //{ AV_CODEC_ID_DVVIDEO, MKTAG('d', 'v', 'h', '1') },
     { AV_CODEC_ID_DVVIDEO, MKTAG('d', 'v', 'h', '2') },
     { AV_CODEC_ID_DVVIDEO, MKTAG('d', 'v', 'h', '4') },
     { AV_CODEC_ID_DVVIDEO, MKTAG('d', 'v', 'h', '5') }, /* DVCPRO HD 50i produced by FCP */
@@ -163,6 +163,7 @@ const AVCodecTag ff_codec_movvideo_tags[] = {
     { AV_CODEC_ID_HEVC, MKTAG('h', 'e', 'v', '1') }, /* HEVC/H.265 which indicates parameter sets may be in ES */
     { AV_CODEC_ID_HEVC, MKTAG('h', 'v', 'c', '1') }, /* HEVC/H.265 which indicates parameter sets shall not be in ES */
     { AV_CODEC_ID_HEVC, MKTAG('d', 'v', 'h', 'e') }, /* HEVC Dobly vision  ES  dvhe*/
+    { AV_CODEC_ID_HEVC, MKTAG('d', 'v', 'h', '1') }, /* HEVC Dobly vision  ES  dvh1*/
     { AV_CODEC_ID_HEVC, MKTAG('D', 'O', 'V', 'I') }, /* HEVC Dobly vision  ES  dovi*/
 
     { AV_CODEC_ID_H264, MKTAG('a', 'v', 'c', '1') }, /* AVC-1/H.264 */
@@ -186,6 +187,8 @@ const AVCodecTag ff_codec_movvideo_tags[] = {
     { AV_CODEC_ID_H264, MKTAG('r', 'v', '6', '4') }, /* X-Com Radvision */
     { AV_CODEC_ID_H264, MKTAG('x', 'a', 'l', 'g') }, /* XAVC-L HD422 produced by FCP */
     { AV_CODEC_ID_H264, MKTAG('a', 'v', 'l', 'g') }, /* Panasonic P2 AVC-LongG */
+    { AV_CODEC_ID_H264, MKTAG('d', 'v', 'a', 'v') }, /* AVC  Dobly vision  ES  dvav*/
+    { AV_CODEC_ID_H264, MKTAG('d', 'v', 'a', '1') }, /* AVC  Dobly vision  ES  dva1*/
 
     { AV_CODEC_ID_VP9,  MKTAG('v', 'p', '0', '9') }, /* VP9 */
 

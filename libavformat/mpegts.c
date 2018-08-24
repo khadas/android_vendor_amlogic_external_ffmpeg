@@ -1947,6 +1947,31 @@ int ff_parse_mpeg2_descriptor(AVFormatContext *fc, AVStream *st, int stream_type
             }
         }
         break;
+    case 0xb0: /* Dolby Vision extension descriptor */
+        if (desc_len > 0 && desc_len < 4)
+            return AVERROR_INVALIDDATA;
+
+        uint8_t dv_version_major  = get8(pp, desc_end);
+        uint8_t dv_version_minor  = get8(pp, desc_end);
+        if (dv_version_major != 1 || dv_version_minor != 0)
+            return AVERROR_INVALIDDATA;
+        uint8_t data2 = get8(pp, desc_end);
+        uint8_t data3 = get8(pp, desc_end);
+        uint8_t profile = data2 >> 1;
+        // profile == (0, 1, 9) --> AVC; profile = (2,3,4,5,6,7,8) --> HEVC;
+        if (profile > 9) {
+            av_log(fc, AV_LOG_ERROR, "profile error:%x\n", profile);
+            *pp = desc_end;
+            return 0;
+        }
+
+        uint8_t level = ((data2 & 0x1) << 5) | ((data3 >> 3) & 0x1f);
+        av_log(fc, AV_LOG_INFO, "level:%d\n", level);
+
+        st->codec->has_dolby_vision_config_box = 1;
+        st->codec->dolby_vision_profile = profile;
+        st->codec->dolby_vision_level = level;
+        break;
     default:
         break;
     }
