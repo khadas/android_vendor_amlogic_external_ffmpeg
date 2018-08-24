@@ -1465,6 +1465,57 @@ include $(CLEAR_VARS)
 
 LOCAL_MODULE := libamffmpeg
 
+LOCAL_MODULE_TAGS := optional
+
+ifeq ($(TARGET_ARCH),$(filter $(TARGET_ARCH),arm arm64))
+LOCAL_ARM_MODE := arm
+endif
+
+LOCAL_CFLAGS := $(FFMPEG_CFLAGS) -DFF_API_AV_GETTIME=0
+
+#LOCAL_CFLAGS_arm := $(FFMPEG_CFLAGS_armv7-a-neon)
+
+LOCAL_CFLAGS_32 := -DARCH_ARM
+LOCAL_CFLAGS_64 := -DARCH_AARCH64
+
+LOCAL_CLANG_ASFLAGS_arm += -no-integrated-as
+LOCAL_CLANG_ASFLAGS_arm64 += -no-integrated-as
+
+LOCAL_LDFLAGS += $(FFMPEG_LDFLAGS)
+
+LOCAL_LDFLAGS_arm := -Wl,--no-warn-shared-textrel
+LOCAL_LDFLAGS_arm64 := -Wl,--no-warn-shared-textrel
+
+LOCAL_SRC_FILES := \
+    $(FFMPEG_LIBAVUTIL_SRC_FILES) \
+    $(FFMPEG_LIBAVCODEC_SRC_FILES) \
+    $(FFMPEG_LIBAVFORMAT_SRC_FILES) \
+    $(FFMPEG_LIBSWSCALE_SRC_FILES) \
+    $(FFMPEG_LIBRESAMPLE_SRC_FILES)
+
+LOCAL_SRC_FILES_arm := \
+    $(FFMPEG_LIBAVCODEC_SRC_FILES_armv7-a-neon) \
+    $(FFMPEG_LIBAVUTIL_SRC_FILES_armv7-a-neon) \
+    $(FFMPEG_LIBRESAMPLE_SRC_FILES_armv7-a-neon) \
+    $(FFMPEG_LIBSWSCALE_SRC_FILES_armv7-a-neon) \
+
+LOCAL_SRC_FILES_arm64 := \
+    $(FFMPEG_LIBAVCODEC_SRC_FILES_armv8-a) \
+    $(FFMPEG_LIBAVUTIL_SRC_FILES_armv8-a) \
+    $(FFMPEG_LIBRESAMPLE_SRC_FILES_armv8-a) \
+    $(FFMPEG_LIBSWSCALE_SRC_FILES_armv8-a) \
+
+LOCAL_C_INCLUDES += external/zlib
+
+LOCAL_SHARED_LIBRARIES := libutils liblog libdl libz
+
+include $(BUILD_SHARED_LIBRARY)
+
+ifneq (0, $(shell expr $(PLATFORM_VERSION) \>= 9))
+include $(CLEAR_VARS)
+
+LOCAL_MODULE := libamffmpeg.vendor
+
 LOCAL_VENDOR_MODULE := true
 
 LOCAL_MODULE_TAGS := optional
@@ -1512,3 +1563,4 @@ LOCAL_C_INCLUDES += external/zlib
 LOCAL_SHARED_LIBRARIES := libutils liblog libdl libz
 
 include $(BUILD_SHARED_LIBRARY)
+endif
