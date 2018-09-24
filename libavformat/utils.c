@@ -2042,6 +2042,11 @@ int ff_index_search_timestamp(const AVIndexEntry *entries, int nb_entries,
             a = m;
     }
     m = (flags & AVSEEK_FLAG_BACKWARD) ? a : b;
+    if (flags & AVSEEK_FLAG_CLOSEST_SYNC) {
+        int64_t delta_a = wanted_timestamp - entries[a].timestamp;
+        int64_t delta_b = entries[b].timestamp - wanted_timestamp;
+        m = (delta_a < delta_b) ? a : b;
+    }
 
     if (!(flags & AVSEEK_FLAG_ANY))
         while (m >= 0 && m < nb_entries &&
