@@ -118,6 +118,99 @@ static int mov_metadata_int8_no_padding(MOVContext *c, AVIOContext *pb,
 
     return 0;
 }
+static int get_string16(AVIOContext *pb, int maxlen, char *buf, int buflen)
+{
+    char *q = buf;
+    int ret = 0;
+    if (buflen <= 0)
+        return AVERROR(EINVAL);
+    while (ret + 1 < maxlen) {
+        uint8_t tmp;
+        uint32_t ch;
+        GET_UTF16(ch, (ret += 2) <= maxlen ? avio_rl16(pb) : 0, break;);
+        PUT_UTF8(ch, tmp, if (q - buf < buflen - 1) *q++ = tmp;)
+    }
+    *q = 0;
+
+    return ret;
+}
+
+static int mov_metadata_3gp_matadata(MOVContext *c, AVIOContext *pb,
+                                        MOVAtom atom)
+{
+    av_log(c->fc, AV_LOG_ERROR, "mov_metadata_3gp_matadata:%lld\n", atom.size);
+    const char *key = NULL;
+    uint32_t tag = atom.type;
+    int64_t len = atom.size;
+
+    if (len < 6)
+        return AVERROR_INVALIDDATA;
+
+    uint8_t* buf = av_mallocz(len + 1);
+
+    if (avio_read(pb, buf, len) != len) {
+        av_freep(&buf);
+        return AVERROR_INVALIDDATA;
+    }
+
+    switch (tag) {
+        case MKTAG('t','i','t','l'): key = "title"; break;
+        case MKTAG('p','e','r','f'): key = "artist"; break;
+        case MKTAG('a','u','t','h'): key = "writer"; break;
+        case MKTAG('a','l','b','m'):
+        {
+            if (buf[len - 1] != '\0') {
+                char tmp[4];
+                sprintf(tmp, "%u", buf[len - 1]);
+                c->fc->event_flags |= AVFMT_EVENT_FLAG_METADATA_UPDATED;
+                av_dict_set(&c->fc->metadata, "track", tmp, 0);
+            }
+            key = "album";
+            break;
+        }
+        case MKTAG('y','r','r','c'):
+        {
+            char tmp[5];
+            uint16_t year = buf[4] << 8 | buf[5];
+
+            if (year < 10000) {
+                sprintf(tmp, "%u", year);
+                c->fc->event_flags |= AVFMT_EVENT_FLAG_METADATA_UPDATED;
+                av_dict_set(&c->fc->metadata, "year", tmp, 0);
+            }
+
+        }
+        default:
+            break;
+    }
+
+    if (key != NULL) {
+        int isUTF8 = 1; // Common case
+        uint16_t *framedata = NULL;
+
+        if (len- 6 >= 4) {
+            framedata = (uint16_t *)(buf + 6);
+            if (0xfeff == *framedata) {
+                isUTF8 = 0;
+            }
+        }
+        if (isUTF8) {
+            buf[len] = 0;
+            c->fc->event_flags |= AVFMT_EVENT_FLAG_METADATA_UPDATED;
+            av_dict_set(&c->fc->metadata, key, (const char *)buf + 6, 0);
+        } else {
+            memset(buf, 0, len + 1);
+            avio_seek(pb, -len + 8, SEEK_CUR);
+            get_string16(pb, len - 8, buf, len + 1);
+            av_log(c->fc, AV_LOG_VERBOSE, "valse %s\n", buf);
+            c->fc->event_flags |= AVFMT_EVENT_FLAG_METADATA_UPDATED;
+            av_dict_set(&c->fc->metadata, key, (const char *)buf, 0);
+        }
+    }
+
+    av_freep(&buf);
+    return 0;
+}
 
 static int mov_metadata_gnre(MOVContext *c, AVIOContext *pb,
                              unsigned len, const char *key)
@@ -390,6 +483,13 @@ static int mov_read_udta_string(MOVContext *c, AVIOContext *pb, MOVAtom atom)
     case MKTAG(0xa9,'w','r','n'): key = "warning";   break;
     case MKTAG(0xa9,'w','r','t'): key = "composer";  break;
     case MKTAG(0xa9,'x','y','z'): key = "location";  break;
+/*add for 3gp metaData */
+    case MKTAG('t','i','t','l'):
+    case MKTAG('p','e','r','f'):
+    case MKTAG('a','u','t','h'):
+    case MKTAG('a','l','b','m'):
+    case MKTAG('y','r','r','c'):
+        return mov_metadata_3gp_matadata(c, pb, atom);
     }
 retry:
     if (c->itunes_metadata && atom.size > 8) {
@@ -1184,9 +1284,11 @@ static int mov_read_moof(MOVContext *c, AVIOContext *pb, MOVAtom atom)
 
 static void mov_metadata_creation_time(AVDictionary **metadata, int64_t time)
 {
-    if (time) {
-        if(time >= 2082844800)
-            time -= 2082844800;  /* seconds between 1904-01-01 and Epoch */
+    if (time >= 0) {
+        if (time < INT64_MIN + 2082844800) {
+            return;
+        }
+        time -= 2082844800;  /* seconds between 1904-01-01 and Epoch */
 
         if ((int64_t)(time * 1000000ULL) / 1000000 != time) {
             av_log(NULL, AV_LOG_DEBUG, "creation_time is not representable\n");
@@ -1741,6 +1843,52 @@ static int mov_read_dvcc(MOVContext *c, AVIOContext *pb, MOVAtom atom)
 
     return 0;
 }
+
+/**
+ * This function reads atom content and puts data in extradata without tag
+ * nor size unlike mov_read_extradata.
+ */
+static int mov_read_pssh(MOVContext *c, AVIOContext *pb, MOVAtom atom)
+{
+    MOVPsshInfo *pssh;
+    int err;
+    int ret;
+    uint32_t psshdatalen;
+    int i;
+
+    av_log(c, AV_LOG_VERBOSE, "mov_read_pssh:%d\n", atom.size);
+
+    if ((uint64_t)c->pssh_count+1 >= UINT_MAX / sizeof(*c->pssh_info))
+        return AVERROR_INVALIDDATA;
+    if ((err = av_reallocp_array(&c->pssh_info, c->pssh_count + 1,
+                                 sizeof(*c->pssh_info))) < 0) {
+        c->pssh_count = 0;
+        return err;
+    }
+
+    pssh = &c->pssh_info[c->pssh_count++];
+    avio_skip(pb, 4);
+    ret = avio_read(pb, &pssh->uuid, 16);
+    if (ret < 16) {
+        av_log(c, AV_LOG_ERROR, "avio_read:%d, error\n", ret);
+        return AVERROR_INVALIDDATA;
+    }
+
+    psshdatalen = avio_rb32(pb);
+
+    pssh->data = av_malloc(psshdatalen);
+    pssh->data_len = psshdatalen;
+
+    ret = avio_read(pb, pssh->data, psshdatalen);
+    if (ret < psshdatalen) {
+        av_log(c, AV_LOG_ERROR, "avio_read:%d, error\n", ret);
+        av_freep(&pssh->data);
+        return AVERROR_INVALIDDATA;
+    }
+
+    return 0;
+}
+
 
 
 
@@ -5425,6 +5573,7 @@ static const MOVParseTableEntry mov_default_parse_table[] = {
 { MKTAG('I','D','3','2'), mov_read_id32 }, /* id32 video box */
 { MKTAG('d','v','c','C'), mov_read_dvcc }, /* Dolby Vision configuration box*/
 { MKTAG('d','v','v','C'), mov_read_dvcc }, /* Dolby Vision configuration box*/
+{ MKTAG('p','s','s','h'), mov_read_pssh }, /* Dolby Vision configuration box*/
 
 
 { 0, NULL }
@@ -5866,6 +6015,17 @@ static int mov_read_close(AVFormatContext *s)
     }
 
     av_freep(&mov->trex_data);
+    if (mov->pssh_info && mov->pssh_count > 0) {
+        for (i = 0; i < mov->pssh_count; i++) {
+            av_freep(&mov->pssh_info[i].data);
+        }
+        av_freep(&mov->pssh_info);
+    }
+
+    if (s->pssh_info && s->pssh_len > 0) {
+        av_freep(&s->pssh_info);
+    }
+
     av_freep(&mov->bitrates);
 
     for (i = 0; i < mov->fragment_index_count; i++) {
@@ -6133,6 +6293,29 @@ static int mov_read_header(AVFormatContext *s)
                     return AVERROR_INVALIDDATA;
                 }
                 st->codecpar->bit_rate = sc->data_size * 8 * sc->time_scale / st->duration;
+            }
+        }
+    }
+    s->pssh_info = NULL;
+    s->pssh_len = 0;
+    if (mov->pssh_info) {
+        int psshsize = 0;
+        for (i = 0; i < mov->pssh_count; i++) {
+            psshsize += 20 + mov->pssh_info[i].data_len;
+        }
+
+        if (psshsize > 0 && psshsize <= UINT32_MAX) {
+            s->pssh_info = (char*)av_mallocz(psshsize);
+            s->pssh_len = psshsize;
+            if (!s->pssh_info) {
+                av_log(s, AV_LOG_ERROR, "b/28471206");
+                return AVERROR_INVALIDDATA;
+            }
+            char *ptr = s->pssh_info;
+            for (i = 0; i < mov->pssh_count; i++) {
+                memcpy(ptr, mov->pssh_info[i].uuid, 20); // uuid + length
+                memcpy(ptr + 20, mov->pssh_info[i].data, mov->pssh_info[i].data_len);
+                ptr += (20 + mov->pssh_info[i].data_len);
             }
         }
     }
@@ -6481,8 +6664,14 @@ static int mov_seek_stream(AVFormatContext *s, AVStream *st, int64_t timestamp, 
     int ret = mov_seek_fragment(s, st, timestamp);
     if (ret < 0)
         return ret;
+    if (flags & AVSEEK_FLAG_FRAME_INDEX) {
+        int want_sample = timestamp;
+        if (want_sample > 0)
+            sample = want_sample;
+    } else {
+        sample = av_index_search_timestamp(st, timestamp, flags);
+    }
 
-    sample = av_index_search_timestamp(st, timestamp, flags);
     av_log(s, AV_LOG_TRACE, "stream %d, timestamp %"PRId64", sample %d\n", st->index, timestamp, sample);
     if (sample < 0 && st->nb_index_entries && timestamp < st->index_entries[0].timestamp)
         sample = 0;

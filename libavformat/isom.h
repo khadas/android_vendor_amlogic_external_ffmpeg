@@ -211,6 +211,13 @@ typedef struct MOVStreamContext {
     } cenc;
 } MOVStreamContext;
 
+typedef struct MOVPsshInfo {
+    uint8_t uuid[16];
+    uint32_t data_len;
+    uint8_t *data;
+} MOVPsshInfo;
+
+
 typedef struct MOVContext {
     const AVClass *class; ///< class for private options
     AVFormatContext *fc;
@@ -261,6 +268,8 @@ typedef struct MOVContext {
     int decryption_key_len;
     int enable_drefs;
     int32_t movie_display_matrix[3][3]; ///< display matrix from mvhd
+    MOVPsshInfo *pssh_info;
+    unsigned pssh_count;
 } MOVContext;
 
 int ff_mp4_read_descr_len(AVIOContext *pb);

@@ -1917,6 +1917,9 @@ typedef struct AVFormatContext {
      * - decoding: set by user
      */
     int max_streams;
+
+    uint8_t *pssh_info;
+    int pssh_len;
 } AVFormatContext;
 
 /**
@@ -2414,6 +2417,10 @@ void avformat_close_input(AVFormatContext **s);
 #define AVSEEK_FLAG_BYTE     2 ///< seeking based on position in bytes
 #define AVSEEK_FLAG_ANY      4 ///< seek to any frame, even non-keyframes
 #define AVSEEK_FLAG_FRAME    8 ///< seeking based on frame number
+#define AVSEEK_FLAG_CLOSEST_SYNC   16 ///< seeking to closeset keyframes
+#define AVSEEK_FLAG_FRAME_INDEX    32 ///< seeking to frame index
+
+
 
 /**
  * @addtogroup lavf_encoding
