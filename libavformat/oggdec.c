@@ -497,7 +497,6 @@ static int ogg_packet(AVFormatContext *s, int *sid, int *dstart, int *dsize,
 
         av_log(s, AV_LOG_TRACE, "ogg_packet: idx=%d pstart=%d psize=%d segp=%d nsegs=%d\n",
                 idx, os->pstart, os->psize, os->segp, os->nsegs);
-
         if (!os->codec) {
             if (os->header < 0) {
                 os->codec = ogg_find_codec(os->buf, os->bufpos);
@@ -694,6 +693,7 @@ static int ogg_read_header(AVFormatContext *s)
 {
     struct ogg *ogg = s->priv_data;
     int ret, i;
+    int64_t orgpos = avio_tell(s->pb);
 
     ogg->curidx = -1;
 
@@ -703,6 +703,10 @@ static int ogg_read_header(AVFormatContext *s)
         if (ret < 0) {
             ogg_read_close(s);
             return ret;
+        }
+        if ((avio_tell(s->pb) - orgpos) > s->probesize) {
+            av_log(s, AV_LOG_ERROR, "%lld(B) timeout, Cannot find ogg head!!\n", s->probesize);
+            return -1;
         }
     } while (!ogg->headers);
     av_log(s, AV_LOG_TRACE, "found headers\n");
