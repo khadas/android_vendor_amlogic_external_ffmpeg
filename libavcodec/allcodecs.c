@@ -681,6 +681,7 @@ static void register_all(void)
     REGISTER_PARSER(ADX,                adx);
     REGISTER_PARSER(BMP,                bmp);
     REGISTER_PARSER(CAVSVIDEO,          cavsvideo);
+    REGISTER_PARSER(CAVS2VIDEO,         cavs2video);
     REGISTER_PARSER(COOK,               cook);
     REGISTER_PARSER(DCA,                dca);
     REGISTER_PARSER(DIRAC,              dirac);

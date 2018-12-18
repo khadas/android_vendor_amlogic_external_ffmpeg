@@ -91,6 +91,7 @@ static void register_all(void)
     REGISTER_DEMUXER (C93,              c93);
     REGISTER_MUXDEMUX(CAF,              caf);
     REGISTER_MUXDEMUX(CAVSVIDEO,        cavsvideo);
+    REGISTER_DEMUXER (CAVS2VIDEO,       cavs2video);
     REGISTER_DEMUXER (CDG,              cdg);
     REGISTER_DEMUXER (CDXL,             cdxl);
     REGISTER_DEMUXER (CINE,             cine);
