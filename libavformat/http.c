@@ -160,6 +160,7 @@ static const AVOption options[] = {
     { "listen", "listen on HTTP", OFFSET(listen), AV_OPT_TYPE_INT, { .i64 = 0 }, 0, 2, D | E },
     { "resource", "The resource requested by a client", OFFSET(resource), AV_OPT_TYPE_STRING, { .str = NULL }, 0, 0, E },
     { "reply_code", "The http status code to return to a client", OFFSET(reply_code), AV_OPT_TYPE_INT, { .i64 = 200}, INT_MIN, 599, E},
+    { "http_file_size", "current segment size", OFFSET(filesize), AV_OPT_TYPE_INT,{.i64 = 0}, 0, INT_MAX, AV_OPT_FLAG_EXPORT},
     { NULL }
 };
 
@@ -1404,6 +1405,10 @@ static int http_read(URLContext *h, uint8_t *buf, int size)
     size = http_read_stream(h, buf, size);
     if (size > 0)
         s->icy_data_read += size;
+
+    if (s->filesize > 0 && s->filesize < INT_MAX && av_opt_set_int(s, "http_file_size", s->filesize, 0) < 0)
+        av_log(s, AV_LOG_ERROR, "av_opt_set_int http_file_size error!\n");
+
     return size;
 }
 

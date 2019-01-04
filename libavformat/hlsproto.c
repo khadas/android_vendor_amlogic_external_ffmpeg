@@ -27,6 +27,7 @@
 
 #include "libavutil/avstring.h"
 #include "libavutil/time.h"
+#include "libavutil/opt.h"
 #include "avformat.h"
 #include "avio_internal.h"
 #include "internal.h"
@@ -44,10 +45,23 @@
  * If the main playlist doesn't point at any variants, we still create
  * one anonymous toplevel variant for this, to maintain the structure.
  */
+enum KeyType {
+    KEY_NONE,
+    KEY_AES_128,
+    KEY_SAMPLE_AES
+};
+
+struct key_info {
+     char uri[MAX_URL_SIZE];
+     char method[11];
+     char iv[35];
+};
 
 struct segment {
     int64_t duration;
     char url[MAX_URL_SIZE];
+    char * seg_kurl;
+    uint8_t seg_iv[33];
 };
 
 struct variant {
@@ -56,6 +70,7 @@ struct variant {
 };
 
 typedef struct HLSContext {
+    const AVClass *class;
     char playlisturl[MAX_URL_SIZE];
     int64_t target_duration;
     int start_seq_no;
@@ -65,10 +80,30 @@ typedef struct HLSContext {
     int n_variants;
     struct variant **variants;
     int cur_seq_no;
+    int cur_seq_size;
+    int durations;
+    char* cur_kurl;
+    uint8_t cur_iv[33];
     URLContext *seg_hd;
     int64_t last_load_time;
+    int is_encrypted;
 } HLSContext;
 
+static const AVOption hls_options[] = {
+    {"cur_seq_no", "current segment index number", offsetof(HLSContext, cur_seq_no), AV_OPT_TYPE_INT,{.i64 = 0}, 0, INT_MAX, AV_OPT_FLAG_EXPORT},
+    {"cur_seq_size", "current segment size", offsetof(HLSContext, cur_seq_size), AV_OPT_TYPE_INT,{.i64 = 0}, 0, INT_MAX, AV_OPT_FLAG_EXPORT},
+    {"cur_kurl", "current key url", offsetof(HLSContext,cur_kurl), AV_OPT_TYPE_STRING, {.str=""}},
+    {"cur_iv",  "current iv", offsetof(HLSContext,cur_iv),  AV_OPT_TYPE_BINARY, .flags = AV_OPT_FLAG_DECODING_PARAM|AV_OPT_FLAG_ENCODING_PARAM },
+    {"durations",  "durations", offsetof(HLSContext,durations),  AV_OPT_TYPE_INT,{.i64 = 0}, 0, INT_MAX, AV_OPT_FLAG_EXPORT},
+    { NULL },
+};
+
+static const AVClass hls_context_class = {
+    .class_name = "hls protocol",
+    .item_name  = av_default_item_name,
+    .option     = hls_options,
+    .version    = LIBAVUTIL_VERSION_INT,
+};
 static int read_chomp_line(AVIOContext *s, char *buf, int maxlen)
 {
     int len = ff_get_line(s, buf, maxlen);
@@ -80,8 +115,14 @@ static int read_chomp_line(AVIOContext *s, char *buf, int maxlen)
 static void free_segment_list(HLSContext *s)
 {
     int i;
-    for (i = 0; i < s->n_segments; i++)
+    for (i = 0; i < s->n_segments; i++) {
+        if (s->segments[i]->seg_kurl)
+        {
+            av_free (s->segments[i]->seg_kurl);
+            s->segments[i]->seg_kurl = NULL;
+        }
         av_freep(&s->segments[i]);
+    }
     av_freep(&s->segments);
     s->n_segments = 0;
 }
@@ -108,6 +149,20 @@ static void handle_variant_args(struct variant_info *info, const char *key,
     }
 }
 
+static void handle_key_args(struct key_info *info, const char *key,
+                            int key_len, char **dest, int *dest_len)
+{
+    if (!strncmp(key, "METHOD=", key_len)) {
+        *dest     =        info->method;
+        *dest_len = sizeof(info->method);
+    } else if (!strncmp(key, "URI=", key_len)) {
+        *dest     =        info->uri;
+        *dest_len = sizeof(info->uri);
+    } else if (!strncmp(key, "IV=", key_len)) {
+        *dest     =        info->iv;
+        *dest_len = sizeof(info->iv);
+    }
+}
 static int parse_playlist(URLContext *h, const char *url)
 {
     HLSContext *s = h->priv_data;
@@ -116,6 +171,11 @@ static int parse_playlist(URLContext *h, const char *url)
     int64_t duration = 0;
     char line[1024];
     const char *ptr;
+    enum KeyType key_type = KEY_NONE;
+    uint8_t iv[16] = "";
+    int has_iv = 0;
+    char * kurl =NULL;
+    uint8_t kiv[33]= {0};
 
     if ((ret = ffio_open_whitelist(&in, url, AVIO_FLAG_READ,
                                    &h->interrupt_callback, NULL,
@@ -138,6 +198,22 @@ static int parse_playlist(URLContext *h, const char *url)
             ff_parse_key_value(ptr, (ff_parse_key_val_cb) handle_variant_args,
                                &info);
             bandwidth = atoi(info.bandwidth);
+        } else if (av_strstart(line, "#EXT-X-KEY:", &ptr)) {
+            struct key_info info = {{0}};
+            s->is_encrypted = 1;
+            ff_parse_key_value(ptr, (ff_parse_key_val_cb) handle_key_args,
+                               &info);
+            has_iv = 0;
+            if (!strcmp(info.method, "AES-128"))
+                key_type = KEY_AES_128;
+            if (!strcmp(info.method, "SAMPLE-AES"))
+                key_type = KEY_SAMPLE_AES;
+            if (!strncmp(info.iv, "0x", 2) || !strncmp(info.iv, "0X", 2)) {
+                ff_hex_to_data(iv, info.iv + 2);
+                has_iv = 1;
+            }
+            kurl = av_strdup (info.uri);
+            memcpy(kiv,info.iv+2,32);
         } else if (av_strstart(line, "#EXT-X-TARGETDURATION:", &ptr)) {
             s->target_duration = atoi(ptr) * AV_TIME_BASE;
         } else if (av_strstart(line, "#EXT-X-MEDIA-SEQUENCE:", &ptr)) {
@@ -157,6 +233,11 @@ static int parse_playlist(URLContext *h, const char *url)
                     goto fail;
                 }
                 seg->duration = duration;
+                if (key_type != KEY_NONE)
+                {
+                    seg->seg_kurl =  av_strdup(kurl);
+                    memcpy(seg->seg_iv,kiv,32);
+                }
                 ff_make_absolute_url(seg->url, sizeof(seg->url), url, line);
                 dynarray_add(&s->segments, &s->n_segments, seg);
                 is_segment = 0;
@@ -176,6 +257,11 @@ static int parse_playlist(URLContext *h, const char *url)
     s->last_load_time = av_gettime_relative();
 
 fail:
+    if (kurl)
+    {
+        av_free (kurl);
+        kurl = NULL;
+    }
     avio_close(in);
     return ret;
 }
@@ -246,7 +332,15 @@ static int hls_open(URLContext *h, const char *uri, int flags)
     s->cur_seq_no = s->start_seq_no;
     if (!s->finished && s->n_segments >= 3)
         s->cur_seq_no = s->start_seq_no + s->n_segments - 3;
-
+    if (s->finished)
+    {
+       for (i = 0 ; i < s->n_segments ; i++)
+       {
+         s->durations += s->segments[i]->duration;
+       }
+       if (av_opt_set_int(s, "durations", s->durations, 0) < 0)
+            av_log(s, AV_LOG_ERROR, "set s->duration error!\n");
+    }
     return 0;
 
 fail:
@@ -260,10 +354,38 @@ static int hls_read(URLContext *h, uint8_t *buf, int size)
     const char *url;
     int ret;
     int64_t reload_interval;
+    int64_t cur_no = 0;
+    int64_t seg_size = 0;
 
 start:
     if (s->seg_hd) {
         ret = ffurl_read(s->seg_hd, buf, size);
+
+        cur_no = s->cur_seq_no;
+        if (av_opt_set_int(s, "cur_seq_no", cur_no, 0) < 0)
+            av_log(s, AV_LOG_WARNING, "set seg_no error!\n");
+
+        if (av_opt_get_int(s->seg_hd->priv_data, "http_file_size", 0, &seg_size) < 0)
+        {
+            av_log(s, AV_LOG_WARNING,  "get http_file_size fail\n");
+        }
+        else
+        {
+            s->cur_seq_size = seg_size;
+            if (av_opt_set_int(s, "cur_seq_size", seg_size, 0) < 0)
+                av_log(s, AV_LOG_WARNING, "set seg_size error!\n");
+        }
+        if (s->is_encrypted)
+        {
+            if (av_opt_set(s, "cur_iv", s->segments[cur_no]->seg_iv, 0) < 0)
+            {
+              av_log(s, AV_LOG_WARNING, "set cur_iv error\n");
+            }
+            if (av_opt_set(s, "cur_kurl", s->segments[cur_no]->seg_kurl, 0) < 0)
+            {
+                av_log(s, AV_LOG_WARNING, "set cur_kurl error!\n");
+            }
+        }
         if (ret > 0)
             return ret;
     }
@@ -317,12 +439,47 @@ retry:
     }
     goto start;
 }
+static int64_t hls_seek_ext(URLContext *h, int64_t off, int whence)
+{   /*add for drmplayer, off is segment idx (0 or start segment) OR timeUs*/
+    int i = 0;
+    HLSContext *s = h->priv_data;
+    if (off >= s->start_seq_no && off <= s->durations)
+    {
+       if (s->seg_hd)
+       {
+          ffurl_close(s->seg_hd);
+          s->seg_hd = NULL;
+       }
+    }
+    if ((off == 0) || (s->n_segments == 1))
+    {
+       s->cur_seq_no = s->start_seq_no;
+    }
+    else if ((off > s->start_seq_no) && (off < s->durations))
+    {
+       int tmpdurations = s->durations;
+       for (i = s->n_segments -1; i >= 0; i--)
+       {
+          tmpdurations -= s->segments[i]->duration;
+          if (tmpdurations < off)
+          {
+             s->cur_seq_no = i ;
+             break;
+          }
+       }
+    }
 
+     av_log(h, AV_LOG_ERROR, "hls_seek_ext s->cur_seq_no %d\n", s->cur_seq_no);
+
+    return off;
+}
 const URLProtocol ff_hls_protocol = {
     .name           = "hls",
     .url_open       = hls_open,
+    .url_seek       = hls_seek_ext,
     .url_read       = hls_read,
     .url_close      = hls_close,
     .flags          = URL_PROTOCOL_FLAG_NESTED_SCHEME,
     .priv_data_size = sizeof(HLSContext),
+    .priv_data_class     = &hls_context_class
 };

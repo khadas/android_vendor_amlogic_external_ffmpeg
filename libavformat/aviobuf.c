@@ -233,9 +233,11 @@ int64_t avio_seek(AVIOContext *s, int64_t offset, int whence)
     int64_t offset1;
     int64_t pos;
     int force = whence & AVSEEK_FORCE;
+    int segstart = whence & AVSEEK_SEGMENTSTART;
     int buffer_size;
     int short_seek;
     whence &= ~AVSEEK_FORCE;
+    whence &= ~AVSEEK_SEGMENTSTART;
 
     if(!s)
         return AVERROR(EINVAL);
@@ -273,7 +275,8 @@ int64_t avio_seek(AVIOContext *s, int64_t offset, int whence)
                offset1 <= buffer_size + short_seek) &&
                !s->write_flag && offset1 >= 0 &&
                (!s->direct || !s->seek) &&
-              (whence != SEEK_END || force)) {
+              (whence != SEEK_END || force) &&
+              (!segstart)) {
         while(s->pos < offset && !s->eof_reached)
             fill_buffer(s);
         if (s->eof_reached)
