@@ -507,6 +507,8 @@ void avio_write_marker(AVIOContext *s, int64_t time, enum AVIODataMarkerType typ
  */
 #define AVSEEK_FORCE 0x20000
 
+/*force to seek to segment start*/
+#define AVSEEK_SEGMENTSTART 0x40000
 /**
  * fseek() equivalent for AVIOContext.
  * @return new position or AVERROR.
