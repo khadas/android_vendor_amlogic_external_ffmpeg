@@ -159,6 +159,7 @@ struct MpegTSContext {
     /** filters for various streams specified by PMT + for the PAT and PMT */
     MpegTSFilter *pids[NB_PID_MAX];
     int current_pid;
+    int64_t ecm_pid;/*pid for encrypted mpegts*/
 };
 
 #define MPEGTS_OPTIONS \
@@ -176,6 +177,8 @@ static const AVOption options[] = {
      {.i64 = 0}, 0, 1, 0 },
     {"skip_clear", "skip clearing programs", offsetof(MpegTSContext, skip_clear), AV_OPT_TYPE_BOOL,
      {.i64 = 0}, 0, 1, 0 },
+    {"ecm_pid", "pid for encrypted mpegts", offsetof(MpegTSContext, ecm_pid), AV_OPT_TYPE_INT,
+     {.i64 = 0}, 0, 0x1fff, AV_OPT_FLAG_EXPORT},
     { NULL },
 };
 
@@ -2001,7 +2004,7 @@ static void pmt_cb(MpegTSFilter *filter, const uint8_t *section, int section_len
     int mp4_descr_count = 0;
     Mp4Descr mp4_descr[MAX_MP4_DESCR_COUNT] = { { 0 } };
     int i;
-
+    ts->ecm_pid = 0x1fff;/*default invalid value*/
     av_log(ts->stream, AV_LOG_TRACE, "PMT: len %i\n", section_len);
     hex_dump_debug(ts->stream, section, section_len);
 
@@ -2056,6 +2059,12 @@ static void pmt_cb(MpegTSFilter *filter, const uint8_t *section, int section_len
         } else if (tag == 0x05 && len >= 4) { // registration descriptor
             prog_reg_desc = bytestream_get_le32(&p);
             len -= 4;
+        } else if (tag == 0x09) {
+            get16(&p, p_end); //ca_system_id
+            ts->ecm_pid = get16(&p, p_end) & 0x1fff;//ecm_pid
+            len -= 4;
+            if (av_opt_set_int(ts, "ecm_pid", ts->ecm_pid, 0) != 0)
+                av_log(ts->stream, AV_LOG_WARNING, "set ecm error!\n");
         }
         p += len;
     }
