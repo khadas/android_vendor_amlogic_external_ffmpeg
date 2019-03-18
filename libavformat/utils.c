@@ -2873,6 +2873,120 @@ static void estimate_timings_from_pts(AVFormatContext *ic, int64_t old_offset)
     }
 }
 
+/* ignore other type's pts */
+static void estimate_timings_from_av_pts(AVFormatContext *ic, int64_t old_offset)
+{
+    AVPacket pkt1, *pkt = &pkt1;
+    AVStream *st;
+    int num, den, read_size, i, ret;
+    int found_duration = 0;
+    int is_end;
+    int64_t filesize, offset, duration;
+    int retry = 0;
+
+    /* flush packet queue */
+    flush_packet_queue(ic);
+
+    filesize = ic->pb ? avio_size(ic->pb) : 0;
+    do {
+        is_end = found_duration;
+        offset = filesize - (DURATION_MAX_READ_SIZE << retry);
+        if (offset < 0)
+            offset = 0;
+
+        avio_seek(ic->pb, offset, SEEK_SET);
+        read_size = 0;
+        for (;;) {
+            if (read_size >= DURATION_MAX_READ_SIZE << (FFMAX(retry - 1, 0)))
+                break;
+
+            do {
+                ret = ff_read_packet(ic, pkt);
+            } while (ret == AVERROR(EAGAIN));
+            if (ret != 0)
+                break;
+            read_size += pkt->size;
+            st         = ic->streams[pkt->stream_index];
+            if (st->codecpar->codec_type != AVMEDIA_TYPE_VIDEO &&
+                st->codecpar->codec_type != AVMEDIA_TYPE_AUDIO)
+                continue;
+
+            if (pkt->pts != AV_NOPTS_VALUE &&
+                (st->start_time != AV_NOPTS_VALUE ||
+                 st->first_dts  != AV_NOPTS_VALUE)) {
+                if (pkt->duration == 0) {
+                    ff_compute_frame_duration(ic, &num, &den, st, st->parser, pkt);
+                    if (den && num) {
+                        pkt->duration = av_rescale_rnd(1,
+                                           num * (int64_t) st->time_base.den,
+                                           den * (int64_t) st->time_base.num,
+                                           AV_ROUND_DOWN);
+                    }
+                }
+                duration = pkt->pts + pkt->duration;
+                found_duration = 1;
+                if (st->start_time != AV_NOPTS_VALUE)
+                    duration -= st->start_time;
+                else
+                    duration -= st->first_dts;
+                if (duration > 0) {
+                    if (st->duration == AV_NOPTS_VALUE || st->info->last_duration<= 0 ||
+                        (st->duration < duration && FFABS(duration - st->info->last_duration) < 60LL*st->time_base.den / st->time_base.num))
+                        st->duration = duration;
+                    st->info->last_duration = duration;
+                }
+            }
+            av_packet_unref(pkt);
+        }
+
+        /* check if all audio/video streams have valid duration */
+        if (!is_end) {
+            is_end = 1;
+            for (i = 0; i < ic->nb_streams; i++) {
+                st = ic->streams[i];
+                switch (st->codecpar->codec_type) {
+                    case AVMEDIA_TYPE_VIDEO:
+                    case AVMEDIA_TYPE_AUDIO:
+                        if (st->duration == AV_NOPTS_VALUE)
+                            is_end = 0;
+                }
+            }
+        }
+    } while (!is_end &&
+             offset &&
+             ++retry <= DURATION_MAX_RETRY);
+
+    av_opt_set(ic, "skip_changes", "0", AV_OPT_SEARCH_CHILDREN);
+
+    /* warn about audio/video streams which duration could not be estimated */
+    for (i = 0; i < ic->nb_streams; i++) {
+        st = ic->streams[i];
+        if (st->duration == AV_NOPTS_VALUE) {
+            switch (st->codecpar->codec_type) {
+            case AVMEDIA_TYPE_VIDEO:
+            case AVMEDIA_TYPE_AUDIO:
+                if (st->start_time != AV_NOPTS_VALUE || st->first_dts  != AV_NOPTS_VALUE) {
+                    av_log(ic, AV_LOG_DEBUG, "stream %d : no PTS found at end of file, duration not set\n", i);
+                } else
+                    av_log(ic, AV_LOG_DEBUG, "stream %d : no TS found at start of file, duration not set\n", i);
+            }
+        }
+    }
+skip_duration_calc:
+    fill_all_stream_timings(ic);
+
+    avio_seek(ic->pb, old_offset, SEEK_SET);
+    for (i = 0; i < ic->nb_streams; i++) {
+        int j;
+
+        st              = ic->streams[i];
+        st->cur_dts     = st->first_dts;
+        st->last_IP_pts = AV_NOPTS_VALUE;
+        st->last_dts_for_order_check = AV_NOPTS_VALUE;
+        for (j = 0; j < MAX_REORDER_DELAY + 1; j++)
+            st->pts_buffer[j] = AV_NOPTS_VALUE;
+    }
+}
 static void estimate_timings(AVFormatContext *ic, int64_t old_offset)
 {
     int64_t file_size;
@@ -2901,7 +3015,42 @@ static void estimate_timings(AVFormatContext *ic, int64_t old_offset)
         estimate_timings_from_bit_rate(ic);
         ic->duration_estimation_method = AVFMT_DURATION_FROM_BITRATE;
     }
+
     update_stream_timings(ic);
+
+    /* error duration re-estimate timing */
+    if (ic->nb_streams == 4) {
+        int i;
+        AVStream av_unused *st;
+        int need_re_estimate_timing = 0;
+        for (i = 0; i < ic->nb_streams; i++) {
+            st = ic->streams[i];
+            if (st->codecpar->codec_type == AVMEDIA_TYPE_VIDEO &&
+                st->codecpar->codec_id == AV_CODEC_ID_HEVC &&
+                st->duration == AV_NOPTS_VALUE)
+            need_re_estimate_timing = 1;
+            av_log(ic, AV_LOG_TRACE, "type %d, duration %lld, need re-estimate %d\n",
+                st->codecpar->codec_type, st->duration, need_re_estimate_timing);
+        }
+        if (need_re_estimate_timing) {
+            int64_t duration, duration1;
+            estimate_timings_from_av_pts(ic, old_offset);
+            ic->duration_estimation_method = AVFMT_DURATION_FROM_PTS;
+            /* update ic->duration */
+            for (i = 0; i < ic->nb_streams; i++) {
+                st = ic->streams[i];
+                if (st->duration != AV_NOPTS_VALUE &&
+                    (st->codecpar->codec_type == AVMEDIA_TYPE_VIDEO ||
+                    st->codecpar->codec_type == AVMEDIA_TYPE_AUDIO)) {
+                    duration1 = av_rescale_q(st->duration, st->time_base, AV_TIME_BASE_Q);
+                    duration  = FFMAX(duration, duration1);
+                }
+            }
+            /* update av duration to ic->duration */
+            av_log(ic, AV_LOG_ERROR, "set ic->duration from %lld to %lld\n", ic->duration, duration);
+            ic->duration = duration;
+        }
+    }
 
     {
         int i;
