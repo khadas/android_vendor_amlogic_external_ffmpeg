@@ -364,6 +364,9 @@ typedef struct MatroskaDemuxContext {
 
     /* WebM DASH Manifest live flag/ */
     int is_live;
+
+    /* last pb->pos*/
+    int64_t last_pos;
 } MatroskaDemuxContext;
 
 typedef struct MatroskaBlock {
@@ -3472,9 +3475,21 @@ static int matroska_read_packet(AVFormatContext *s, AVPacket *pkt)
 {
     MatroskaDemuxContext *matroska = s->priv_data;
     int ret = 0;
+    int64_t file_size = avio_size(matroska->ctx->pb);
+
+    if (abs(matroska->ctx->pb->pos - matroska->last_pos) > file_size/2 || /*seek to end / seek back to set*/
+        (abs(matroska->ctx->pb->pos - matroska->last_pos) >= 250000 && /* seek end estimate retry */
+        abs(matroska->ctx->pb->pos - avio_size(matroska->ctx->pb)) < 2500000)) {
+        /* for avio seek estimate av duration */
+        av_log(NULL, AV_LOG_ERROR, "abs %d, clear queue\n",
+                abs(matroska->ctx->pb->pos - matroska->last_pos));
+        matroska_clear_queue(matroska);
+        matroska->done = 0;
+    }
 
     while (matroska_deliver_packet(matroska, pkt)) {
         int64_t pos = avio_tell(matroska->ctx->pb);
+        matroska->last_pos = pos;
         if (matroska->done)
             return (ret < 0) ? ret : AVERROR_EOF;
         if (matroska_parse_cluster(matroska) < 0)
@@ -3527,6 +3542,7 @@ static int matroska_read_seek(AVFormatContext *s, int stream_index,
     }
 
     avio_seek(s->pb, st->index_entries[index_min].pos, SEEK_SET);
+    matroska->last_pos = avio_tell(matroska->ctx->pb);
     matroska->current_id       = 0;
     if (flags & AVSEEK_FLAG_ANY) {
         st->skip_to_keyframe = 0;
