@@ -1970,11 +1970,30 @@ int ff_parse_mpeg2_descriptor(AVFormatContext *fc, AVStream *st, int stream_type
         }
 
         uint8_t level = ((data2 & 0x1) << 5) | ((data3 >> 3) & 0x1f);
-        av_log(fc, AV_LOG_INFO, "level:%d\n", level);
+        const uint8_t rpu_present_flag = (data3 >> 2) & 0x01;
+        const uint8_t el_present_flag = (data3 >> 1) & 0x01;
+        const uint8_t bl_present_flag = (data3 & 0x01);
+
+        int32_t bl_compatibility_id = 0;
+        if (desc_len == 4) {
+            uint8_t data4 = get8(pp, desc_end);
+            bl_compatibility_id = (int32_t)(data4 >> 4);
+        }
+
+        av_log(fc, AV_LOG_INFO, "profile:%d,level:%d bl_compatibility_id:%d\n", profile, level, bl_compatibility_id);
 
         st->codec->has_dolby_vision_config_box = 1;
         st->codec->dolby_vision_profile = profile;
         st->codec->dolby_vision_level = level;
+        if (rpu_present_flag && el_present_flag && !bl_present_flag) {
+            st->codec->dolby_vision_rpu_assoc = 1;
+        } else {
+            st->codec->dolby_vision_rpu_assoc = 0;
+        }
+
+        if (profile == 8 || profile == 9) {
+            st->codec->dolby_vision_bl_compat_id = bl_compatibility_id;
+        }
         break;
     default:
         break;
