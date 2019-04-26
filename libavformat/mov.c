@@ -1835,11 +1835,31 @@ static int mov_read_dvcc(MOVContext *c, AVIOContext *pb, MOVAtom atom)
     }
 
     uint8_t level = ((config_data[2] & 0x1) << 5) | ((config_data[3] >> 3) & 0x1f);
-    av_log(c, AV_LOG_INFO, "level:%d\n", level);
+
+    const uint8_t rpu_present_flag = (config_data[3] >> 2) & 0x01;
+    const uint8_t el_present_flag = (config_data[3] >> 1) & 0x01;
+    const uint8_t bl_present_flag = (config_data[3] & 0x01);
+
+
+    int32_t bl_compatibility_id = 0;
+    if (atom.size == 4) {
+        bl_compatibility_id = (int32_t)(config_data[4] >> 4);
+    }
+    av_log(c, AV_LOG_INFO, "profile:%d,level:%d bl_compatibility_id:%d\n", profile, level, bl_compatibility_id);
 
     st->codec->has_dolby_vision_config_box = 1;
     st->codec->dolby_vision_profile = profile;
     st->codec->dolby_vision_level = level;
+
+    if (rpu_present_flag && el_present_flag && !bl_present_flag) {
+        st->codec->dolby_vision_rpu_assoc = 1;
+    } else {
+        st->codec->dolby_vision_rpu_assoc = 0;
+    }
+
+    if (profile == 8 || profile == 9) {
+        st->codec->dolby_vision_bl_compat_id = bl_compatibility_id;
+    }
 
     return 0;
 }

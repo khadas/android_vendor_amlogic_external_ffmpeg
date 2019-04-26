@@ -3642,6 +3642,8 @@ typedef struct AVCodecContext {
     int dolby_vision_profile;
     int dolby_vision_level;
     int has_dolby_vision_el;
+    int dolby_vision_rpu_assoc;
+    int dolby_vision_bl_compat_id;
 } AVCodecContext;
 
 AVRational av_codec_get_pkt_timebase         (const AVCodecContext *avctx);
