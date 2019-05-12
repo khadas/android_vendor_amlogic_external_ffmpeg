@@ -896,6 +896,9 @@ FF_ENABLE_DEPRECATION_WARNINGS
                         av_log(s, AV_LOG_DEBUG, "overriding sample_size\n");
                         ast->sample_size = 0;
                     }
+                    if (st->codecpar->codec_id == AV_CODEC_ID_AC3 && ast->dshow_block_align == 1) {
+                        ast->dshow_block_align = 0;
+                    }
                     break;
                 case AVMEDIA_TYPE_SUBTITLE:
                     st->codecpar->codec_type = AVMEDIA_TYPE_SUBTITLE;
