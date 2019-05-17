@@ -3553,7 +3553,7 @@ void ff_rfps_calculate(AVFormatContext *ic)
 static int has_decode_delay_been_guessed_ext(AVStream *st)
 {
     /* trying decode 4k would cost huge memory, invoke oom-killer */
-    return (st->codec_info_nb_frames >= 6 + st->codec->has_b_frames) ||
+    return (st->codec_info_nb_frames >= 32 + st->codec->has_b_frames) ||
            (st->codec->width*st->codec->height >= 3840*2160);
 }
 
