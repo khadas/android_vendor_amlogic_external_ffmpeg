@@ -1618,6 +1618,11 @@ FF_ENABLE_DEPRECATION_WARNINGS
                 st->parser->flags |= PARSER_FLAG_ONCE;
             else if (st->need_parsing == AVSTREAM_PARSE_FULL_RAW)
                 st->parser->flags |= PARSER_FLAG_USE_CODEC_TS;
+            if (st->parser && s && s->iformat
+                 && s->iformat->name
+                 && !strcmp(s->iformat->name, "mpegvideo")) {
+                 st->parser->flags |= PARSER_FLAG_HAS_MPEG2V_META;
+            }
         }
 
         if (!st->need_parsing || !st->parser) {
@@ -3740,6 +3745,11 @@ FF_ENABLE_DEPRECATION_WARNINGS
                     st->parser->flags |= PARSER_FLAG_COMPLETE_FRAMES;
                 } else if (st->need_parsing == AVSTREAM_PARSE_FULL_RAW) {
                     st->parser->flags |= PARSER_FLAG_USE_CODEC_TS;
+                }
+                if (st->parser && ic && ic->iformat
+                     && ic->iformat->name
+                     && !strcmp(ic->iformat->name, "mpegvideo")) {
+                     st->parser->flags |= PARSER_FLAG_HAS_MPEG2V_META;
                 }
             } else if (st->need_parsing) {
                 av_log(ic, AV_LOG_VERBOSE, "parser not found for codec "

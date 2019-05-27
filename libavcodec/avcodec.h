@@ -5114,6 +5114,7 @@ typedef struct AVCodecParserContext {
 
     /*for dolby vision flag*/
 #define PARSER_FLAG_HAS_DV_META               0x0008
+#define PARSER_FLAG_HAS_MPEG2V_META           0x0010
 
     int64_t offset;      ///< byte offset from starting packet start
     int64_t cur_frame_end[AV_PARSER_PTS_NB];
