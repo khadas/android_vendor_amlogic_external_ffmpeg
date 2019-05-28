@@ -3461,6 +3461,9 @@ typedef struct AVCodecContext {
     int64_t pts_correction_last_pts;       /// PTS of the last frame
     int64_t pts_correction_last_dts;       /// DTS of the last frame
 
+    /* to record mpeg4 vol_sprite_usage */
+    int mpeg4_vol_sprite;
+    int mpeg4_quater_sample;
     /**
      * Character encoding of the input subtitles file.
      * - decoding: set by user
