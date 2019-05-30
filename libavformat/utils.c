@@ -3649,7 +3649,7 @@ static int has_codec_parameters_ex(AVCodecContext *enc)
     switch (enc->codec_type) {
         case AVMEDIA_TYPE_AUDIO:
 
-            if (enc->codec_id == AV_CODEC_ID_AC3) {
+            if (enc->codec_id == AV_CODEC_ID_AC3 || enc->codec_id == AV_CODEC_ID_AAC) {
                 val = enc->sample_rate && enc->channels;
             } else {
                 val = enc->sample_rate && enc->channels && enc->sample_fmt != AV_SAMPLE_FMT_NONE;
@@ -3673,6 +3673,31 @@ static int has_codec_parameters_ex(AVCodecContext *enc)
             break;
     }
     return enc->codec_id != AV_CODEC_ID_NONE && val != 0;
+}
+
+//Some special video source, audio information is not found in probeSize;
+//Shoud try continue.
+// return 1, information has been found, no need to try .
+// return 0, information has not been found, need to try continue.
+static int has_reached_probe_size_limit_ex(int64_t readSize, int64_t probeSize, AVFormatContext * ic) {
+    for (int i = 0; i < ic->nb_streams; i++) {
+        AVCodecContext * codec = ic->streams[i]->codec;
+        if (codec->codec_type == AVMEDIA_TYPE_AUDIO) {
+            if (codec->codec_id == AV_CODEC_ID_AAC || codec->codec_id == AV_CODEC_ID_AAC_LATM) {
+                if (codec->channels > 0) {
+                    return 1;
+                }
+            }
+        }
+    }
+
+    if (readSize > probeSize*2) {
+        //audio information is not found, but readSize reached 2*probeSize,
+        //no need to try .
+        return 1;
+    } else {
+        return 0;
+    }
 }
 
 int avformat_find_stream_info(AVFormatContext *ic, AVDictionary **options)
@@ -3864,7 +3889,8 @@ FF_ENABLE_DEPRECATION_WARNINGS
             }
         }
         /* We did not get all the codec info, but we read too much data. */
-        if (read_size >= probesize) {
+        if (read_size >= probesize &&
+            has_reached_probe_size_limit_ex(read_size, probesize, ic)) {
             ret = count;
             av_log(ic, AV_LOG_DEBUG,
                    "Probe buffer size limit of %"PRId64" bytes reached\n", probesize);
