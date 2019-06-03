@@ -3700,6 +3700,45 @@ static int has_reached_probe_size_limit_ex(int64_t readSize, int64_t probeSize, 
     }
 }
 
+static int avformat_check_dv_meta_el(AVFormatContext *ic, AVStream *st, const uint8_t *buf,int buf_size)
+{
+    int nalsize = 0, naltype = 0;
+    const uint8_t *next_avc = buf;
+    int ret = 0;
+
+    if (!buf || buf_size <= 0)
+        return 0;
+    // check first
+    struct AVInputFormat *iformat = ic->iformat;
+    if ((st->codec->codec_id == AV_CODEC_ID_H264 || st->codec->codec_id == AV_CODEC_ID_HEVC)
+        && (iformat == av_find_input_format("mpegts") || iformat == av_find_input_format("mov"))
+        && (st->codec->codec_tag == MKTAG('D', 'O', 'V', 'I')
+        || st->codec->codec_tag == MKTAG('d', 'v', 'h', 'e') || st->codec->codec_tag == MKTAG('d', 'v', 'h', '1')
+        || st->codec->codec_tag == MKTAG('d', 'v', 'a', 'v') || st->codec->codec_tag == MKTAG('d', 'v', 'a', '1')
+        || st->internal->avctx->has_dolby_vision_meta || st->internal->avctx->has_dolby_vision_el)) {
+        return 0;
+    }
+
+    // check meta or el type
+    while (next_avc < (buf + buf_size)) {
+        next_avc += 2; //skip 0 0
+        nalsize = (next_avc[0] << 8)| next_avc[1];
+        if (nalsize < 0)
+            return 0;
+        next_avc = next_avc + 2; //skip size
+        naltype = next_avc[0];
+        av_log(ic, AV_LOG_DEBUG, "naltype:%x size:d\n", naltype, nalsize);
+        if (naltype == 0x7c) {
+            st->internal->avctx->has_dolby_vision_meta = 1;
+        } else if ( naltype == 0x7e) {
+            st->internal->avctx->has_dolby_vision_el = 1;
+        }
+        next_avc = next_avc + nalsize; //skip data
+    }
+
+    return ret;
+}
+
 int avformat_find_stream_info(AVFormatContext *ic, AVDictionary **options)
 {
     int i, count = 0, ret = 0, j;
@@ -4038,13 +4077,15 @@ FF_ENABLE_DEPRECATION_WARNINGS
          * least one frame of codec data, this makes sure the codec initializes
          * the channel configuration and does not only trust the values from
          * the container. */
-
          av_log(ic, AV_LOG_INFO, "codec_id %d, guessed %d, para_ex %d\n", st->codec->codec_id,
                       has_decode_delay_been_guessed_ext(st), has_codec_parameters_ex(st->codec));
          if ((st->codec->codec_id != AV_CODEC_ID_CAVS) &&
             ( !has_decode_delay_been_guessed_ext(st) && !has_codec_parameters_ex(st->codec)))
             try_decode_frame(ic, st, pkt,
                              (options && i < orig_nb_streams) ? &options[i] : NULL);
+
+        // check dolby-vision meta or el
+        avformat_check_dv_meta_el(ic, st, pkt->data, pkt->size);
 
         if (ic->flags & AVFMT_FLAG_NOBUFFER)
             av_packet_unref(pkt);
