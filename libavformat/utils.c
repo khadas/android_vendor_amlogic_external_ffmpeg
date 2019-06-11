@@ -3721,6 +3721,8 @@ static int avformat_check_dv_meta_el(AVFormatContext *ic, AVStream *st, const ui
 
     // check meta or el type
     while (next_avc < (buf + buf_size)) {
+        if (next_avc[0] != 0 || next_avc[1] != 0)
+            return 0;
         next_avc += 2; //skip 0 0
         nalsize = (next_avc[0] << 8)| next_avc[1];
         if (nalsize < 0)
