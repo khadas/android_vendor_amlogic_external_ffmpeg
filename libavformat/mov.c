@@ -6549,10 +6549,18 @@ static int mov_read_packet(AVFormatContext *s, AVPacket *pkt)
     if (st->discard != AVDISCARD_ALL) {
         int64_t ret64 = avio_seek(sc->pb, sample->pos, SEEK_SET);
         if (ret64 != sample->pos) {
-            av_log(mov->fc, AV_LOG_ERROR, "stream %d, offset 0x%"PRIx64": partial file\n",
-                   sc->ffindex, sample->pos);
+            av_log(mov->fc, AV_LOG_ERROR, "stream %d, ret64 0x%"PRIx64"(0x%"PRIx64") offset 0x%"PRIx64": partial file\n",
+                   sc->ffindex, ret64, AVERROR_EOF, sample->pos);
             if (should_retry(sc->pb, ret64)) {
                 mov_current_sample_dec(sc);
+            }
+            if (ret64 == AVERROR_EOF) {
+                /*
+                Some clipped videos have a shorter duration than the duration parsed by ffmpeg.
+                If the seek position is larger than the total time,  ffmpeg will return an error to the player.
+                return EOF if avio_seek returns  EOF.
+                */
+                return AVERROR_EOF;
             }
             return AVERROR_INVALIDDATA;
         }
