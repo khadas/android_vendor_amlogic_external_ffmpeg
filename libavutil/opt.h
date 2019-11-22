@@ -738,6 +738,7 @@ int av_opt_get         (void *obj, const char *name, int search_flags, uint8_t  
 int av_opt_get_int     (void *obj, const char *name, int search_flags, int64_t    *out_val);
 int av_opt_get_double  (void *obj, const char *name, int search_flags, double     *out_val);
 int av_opt_get_q       (void *obj, const char *name, int search_flags, AVRational *out_val);
+int av_opt_get_bin(void *obj, const char *name, int search_flags, uint8_t **out_val);
 int av_opt_get_image_size(void *obj, const char *name, int search_flags, int *w_out, int *h_out);
 int av_opt_get_pixel_fmt (void *obj, const char *name, int search_flags, enum AVPixelFormat *out_fmt);
 int av_opt_get_sample_fmt(void *obj, const char *name, int search_flags, enum AVSampleFormat *out_fmt);

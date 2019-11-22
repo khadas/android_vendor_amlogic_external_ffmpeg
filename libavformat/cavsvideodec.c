@@ -103,9 +103,11 @@ static int cavs2video_probe(AVProbeData *p)
     }
 
     if (seq && pic) {
-        const char *str = p->filename + strlen(p->filename) - 5;
-        if (tolower(str[0]) == 'c' && tolower(str[1]) == 'a' && tolower(str[2]) == 'v' &&tolower(str[3]) == 's' && str[4] == '2') {
-            ret = AVPROBE_SCORE_EXTENSION+2;
+        if (p && p->filename && (strlen(p->filename) > 5)) {
+            const char *str = p->filename + strlen(p->filename) - 5;
+            if (tolower(str[0]) == 'c' && tolower(str[1]) == 'a' && tolower(str[2]) == 'v' &&tolower(str[3]) == 's' && str[4] == '2') {
+                ret = AVPROBE_SCORE_EXTENSION+2;
+            }
         }
     }
     return ret;

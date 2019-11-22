@@ -28,7 +28,7 @@ LOCAL_CLANG := false
 ##### libavutil
 
 FFMPEG_LIBAVUTIL_SRC_FILES := \
-    libavutil/../compat/strtod.c \
+    compat/strtod.c \
     libavutil/adler32.c \
     libavutil/aes.c \
     libavutil/aes_ctr.c \
@@ -1483,8 +1483,8 @@ LOCAL_CLANG_ASFLAGS_arm64 += -no-integrated-as
 
 LOCAL_LDFLAGS += $(FFMPEG_LDFLAGS)
 
-LOCAL_LDFLAGS_arm := -Wl,--no-warn-shared-textrel
-LOCAL_LDFLAGS_arm64 := -Wl,--no-warn-shared-textrel
+LOCAL_LDFLAGS_arm := -Wl
+LOCAL_LDFLAGS_arm64 := -Wl
 
 LOCAL_SRC_FILES := \
     $(FFMPEG_LIBAVUTIL_SRC_FILES) \
@@ -1536,8 +1536,8 @@ LOCAL_CLANG_ASFLAGS_arm64 += -no-integrated-as
 
 LOCAL_LDFLAGS += $(FFMPEG_LDFLAGS)
 
-LOCAL_LDFLAGS_arm := -Wl,--no-warn-shared-textrel
-LOCAL_LDFLAGS_arm64 := -Wl,--no-warn-shared-textrel
+LOCAL_LDFLAGS_arm := -Wl
+LOCAL_LDFLAGS_arm64 := -Wl
 
 LOCAL_SRC_FILES := \
     $(FFMPEG_LIBAVUTIL_SRC_FILES) \
