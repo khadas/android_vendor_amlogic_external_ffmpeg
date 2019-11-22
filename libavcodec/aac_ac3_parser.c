@@ -35,6 +35,7 @@ int ff_aac_ac3_parse(AVCodecParserContext *s1,
     int len, i;
     int new_frame_start;
     int got_frame = 0;
+    int need_assign = 1;
 
 get_next:
     i=END_NOT_FOUND;
@@ -64,6 +65,36 @@ get_next:
         }
     }
 
+    if (s1->flags & PARSER_FLAG_HAS_ES_META) {
+        if (s->codec_id)
+            avctx->codec_id = s->codec_id;
+
+        if (got_frame) {
+            if (avctx->codec_id != AV_CODEC_ID_AAC) {
+                avctx->sample_rate = s->sample_rate;
+
+                /* (E-)AC-3: allow downmixing to stereo or mono */
+                if (s->channels > 1 &&
+                    avctx->request_channel_layout == AV_CH_LAYOUT_MONO) {
+                    avctx->channels       = 1;
+                    avctx->channel_layout = AV_CH_LAYOUT_MONO;
+                } else if (s->channels > 2 &&
+                       avctx->request_channel_layout == AV_CH_LAYOUT_STEREO) {
+                    avctx->channels       = 2;
+                    avctx->channel_layout = AV_CH_LAYOUT_STEREO;
+                } else {
+                    avctx->channels = s->channels;
+                    avctx->channel_layout = s->channel_layout;
+                }
+                s1->duration = s->samples;
+                avctx->audio_service_type = s->service_type;
+            }
+
+            avctx->bit_rate = s->bit_rate;
+        }
+        need_assign = 0;
+    }
+
     if(ff_combine_frame(pc, i, &buf, &buf_size)<0){
         s->remaining_size -= FFMIN(s->remaining_size, buf_size);
         *poutbuf = NULL;
@@ -73,6 +104,9 @@ get_next:
 
     *poutbuf = buf;
     *poutbuf_size = buf_size;
+
+    if (need_assign == 1)
+        return i;
 
     /* update codec info */
     if(s->codec_id)

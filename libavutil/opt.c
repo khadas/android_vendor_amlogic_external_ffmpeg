@@ -912,6 +912,39 @@ int av_opt_get_q(void *obj, const char *name, int search_flags, AVRational *out_
     return 0;
 }
 
+int av_opt_get_bin(void *obj, const char *name, int search_flags, uint8_t **out_val)
+{
+    void *dst, *target_obj;
+    const AVOption *o = av_opt_find2(obj, name, NULL, 0, search_flags, &target_obj);
+    uint8_t *bin;
+    int len;
+
+    if (!o || !target_obj || (o->offset <= 0 && o->type != AV_OPT_TYPE_CONST))
+        return AVERROR_OPTION_NOT_FOUND;
+
+    dst = (uint8_t *)target_obj + o->offset;
+
+    if (o->type != AV_OPT_TYPE_BINARY)
+        return AVERROR(EINVAL);
+
+        if (!*(uint8_t **)dst && (search_flags & AV_OPT_ALLOW_NULL)) {
+            *out_val = NULL;
+            return 0;
+        }
+        len = *(int *)(((uint8_t *)dst) + sizeof(uint8_t *));
+        if ((uint64_t)len > INT_MAX)
+            return AVERROR(EINVAL);
+        if (!(*out_val = av_malloc(len * 2 + 1)))
+            return AVERROR(ENOMEM);
+        if (!len) {
+            *out_val[0] = '\0';
+            return 0;
+        }
+        bin = *(uint8_t **)dst;
+        memcpy(*out_val, bin , len);
+        return 0;
+}
+
 int av_opt_get_image_size(void *obj, const char *name, int search_flags, int *w_out, int *h_out)
 {
     void *dst, *target_obj;

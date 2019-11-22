@@ -77,7 +77,7 @@ const char *avformat_license(void)
     return LICENSE_PREFIX FFMPEG_LICENSE + sizeof(LICENSE_PREFIX) - 1;
 }
 
-int64_t avformat_getcurtime_us(void)
+static int64_t avformat_getcurtime_us(void)
 {
     struct timespec timeval;
     clock_gettime(CLOCK_MONOTONIC, &timeval);
@@ -1477,6 +1477,21 @@ static int parse_packet(AVFormatContext *s, AVPacket *pkt, int stream_index)
         if (st->parser->key_frame == -1 && st->parser->pict_type ==AV_PICTURE_TYPE_NONE && (pkt->flags&AV_PKT_FLAG_KEY))
             out_pkt.flags |= AV_PKT_FLAG_KEY;
 
+        /*
+        Hevc_parse does not get the special H265 frame type.
+        In this case, if parsing MP4 gets a keyframe, then set this frame as a keyframe.
+        */
+        if (st->codecpar->codec_id == AV_CODEC_ID_HEVC &&
+          strstr(s->iformat->name,"mp4")  &&
+          st->parser->key_frame == 0 &&
+          st->parser->pict_type == AV_PICTURE_TYPE_I &&
+          st->parser->picture_structure == AV_PICTURE_STRUCTURE_UNKNOWN &&
+          out_pkt.flags == 0 &&
+          (pkt->flags & AV_PKT_FLAG_KEY)) {
+            out_pkt.flags |= AV_PKT_FLAG_KEY;
+            av_log(s, AV_LOG_ERROR, "hevc_parser cannot get the key frame type of hevc!index:%d\n",pkt->stream_index);
+        }
+
         compute_pkt_fields(s, st, st->parser, &out_pkt, next_dts, next_pts);
 
         ret = add_to_pktbuf(&s->internal->parse_queue, &out_pkt,
@@ -1621,7 +1636,7 @@ FF_ENABLE_DEPRECATION_WARNINGS
             if (st->parser && s && s->iformat
                  && s->iformat->name
                  && !strcmp(s->iformat->name, "mpegvideo")) {
-                 st->parser->flags |= PARSER_FLAG_HAS_MPEG2V_META;
+                 st->parser->flags |= PARSER_FLAG_HAS_ES_META;
             }
         }
 
@@ -2650,7 +2665,7 @@ static void update_stream_timings(AVFormatContext *ic)
 
     if (start_time != INT64_MAX) {
         ic->start_time = start_time;
-        if (end_time != INT64_MIN) {
+        if (end_time != INT64_MIN && duration == INT64_MIN) {
             if (ic->nb_programs > 1) {
                 for (i = 0; i < ic->nb_programs; i++) {
                     p = ic->programs[i];
@@ -2750,6 +2765,7 @@ static void estimate_timings_from_bit_rate(AVFormatContext *ic)
 
 #define DURATION_MAX_READ_SIZE 250000LL
 #define DURATION_MAX_RETRY 6
+#define AV_BIGEST_PTS_VALUE 0x1FFFFFFFF
 
 /* only usable for MPEG-PS streams */
 static void estimate_timings_from_pts(AVFormatContext *ic, int64_t old_offset)
@@ -2805,6 +2821,7 @@ static void estimate_timings_from_pts(AVFormatContext *ic, int64_t old_offset)
             read_size += pkt->size;
             st         = ic->streams[pkt->stream_index];
             if (pkt->pts != AV_NOPTS_VALUE &&
+                pkt->pts <= AV_BIGEST_PTS_VALUE &&
                 (st->start_time != AV_NOPTS_VALUE ||
                  st->first_dts  != AV_NOPTS_VALUE)) {
                 if (pkt->duration == 0) {
@@ -2871,6 +2888,7 @@ static void estimate_timings_from_pts(AVFormatContext *ic, int64_t old_offset)
         int found_pes_header = 0;
         limit_position = 0;
         max_position = filesize;
+        offset = filesize;
         /*Look for the last pes header*/
         do {
             if (!found_pes_header) {
@@ -2888,7 +2906,7 @@ static void estimate_timings_from_pts(AVFormatContext *ic, int64_t old_offset)
 
             avio_seek(ic->pb, offset, SEEK_SET);
             ret = ic->iformat->read_packet(ic, pkt);
-            if (ret == FFERROR_REDO) {
+            if (ret < 0) {
                 found_pes_header = 0;
             } else {
                 found_pes_header = 1;
@@ -3814,8 +3832,10 @@ FF_ENABLE_DEPRECATION_WARNINGS
                 }
                 if (st->parser && ic && ic->iformat
                      && ic->iformat->name
-                     && !strcmp(ic->iformat->name, "mpegvideo")) {
-                     st->parser->flags |= PARSER_FLAG_HAS_MPEG2V_META;
+                     && (!strcmp(ic->iformat->name, "mpegvideo")
+                        || !strcmp(ic->iformat->name, "ac3")
+                        || !strcmp(ic->iformat->name, "eac3"))) {
+                     st->parser->flags |= PARSER_FLAG_HAS_ES_META;
                 }
             } else if (st->need_parsing) {
                 av_log(ic, AV_LOG_VERBOSE, "parser not found for codec "
