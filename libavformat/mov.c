@@ -6714,7 +6714,10 @@ static int mov_seek_stream(AVFormatContext *s, AVStream *st, int64_t timestamp, 
     } else {
         sample = av_index_search_timestamp(st, timestamp, flags);
     }
-
+    if (st->codec->codec_type == AVMEDIA_TYPE_VIDEO && sample <=0 && st->nb_index_entries && sc->keyframe_count <= 1) {
+        sample = av_index_search_timestamp(st, timestamp, AVSEEK_FLAG_ANY);
+        st->keyframe_count = sc->keyframe_count;
+    }
     av_log(s, AV_LOG_TRACE, "stream %d, timestamp %"PRId64", sample %d\n", st->index, timestamp, sample);
     if (sample < 0 && st->nb_index_entries && timestamp < st->index_entries[0].timestamp)
         sample = 0;

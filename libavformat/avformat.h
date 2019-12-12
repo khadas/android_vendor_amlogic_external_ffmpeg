@@ -1083,6 +1083,7 @@ typedef struct AVStream {
     AVIndexEntry *index_entries; /**< Only used if the format does not
                                     support seeking natively. */
     int nb_index_entries;
+    int keyframe_count;
     unsigned int index_entries_allocated_size;
 
     /**
