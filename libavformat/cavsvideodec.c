@@ -33,6 +33,15 @@
 
 #define AVPROBE_SCORE_EXTENSION  50 ///< score for file extension
 
+static unsigned char tolower(unsigned char a)
+{
+	unsigned char b = a - 'A';
+	if (b <= ('Z' - 'A'))
+		a += 'a' - 'A';
+	return a;
+}
+
+
 static int cavsvideo_probe(AVProbeData *p)
 {
     uint32_t code= -1;
